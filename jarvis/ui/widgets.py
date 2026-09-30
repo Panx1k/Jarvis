@@ -8,6 +8,8 @@ from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap, QRad
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QProgressBar, QScrollArea,
                                QSizePolicy, QVBoxLayout, QWidget)
 
+from jarvis.ui import theme
+
 
 def repolish(w: QWidget) -> None:
     w.style().unpolish(w)
@@ -31,14 +33,14 @@ class Backdrop(QWidget):
         p = QPainter(pm)
         w, h = self.width(), self.height()
         g = QLinearGradient(0, 0, 0, h)
-        g.setColorAt(0, QColor(4, 11, 21))
+        g.setColorAt(0, theme.shift_rgb(4, 11, 21))
         g.setColorAt(1, QColor(2, 5, 10))
         p.fillRect(0, 0, w, h, g)
         glow = QRadialGradient(QPointF(w / 2, h * 0.45), max(w, h) * 0.55)
-        glow.setColorAt(0, QColor(0, 120, 180, 45))
+        glow.setColorAt(0, theme.shift_rgb(0, 120, 180, 45))
         glow.setColorAt(1, QColor(0, 0, 0, 0))
         p.fillRect(0, 0, w, h, glow)
-        pen = QPen(QColor(0, 150, 220, 14))
+        pen = QPen(theme.shift_rgb(0, 150, 220, 14))
         pen.setWidth(1)
         p.setPen(pen)
         step = 32
@@ -75,7 +77,7 @@ class HudPanel(QFrame):
         super().paintEvent(event)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor(0, 216, 255, 150))
+        pen = QPen(theme.shift_rgb(0, 216, 255, 150))
         pen.setWidthF(1.4)
         p.setPen(pen)
         w, h, L = self.width() - 1, self.height() - 1, 12

@@ -58,7 +58,7 @@ class DiscordUI:
             self.uia.CreatePropertyCondition(UIA.UIA_ControlTypePropertyId, UIA.UIA_ButtonControlTypeId),
             self.uia.CreatePropertyCondition(UIA.UIA_ControlTypePropertyId, UIA.UIA_TabItemControlTypeId))
         found = []
-        for attempt in range(3):           # Chromium строит дерево доступности по первому запросу
+        for attempt in range(3):
             items = root.FindAll(UIA.TreeScope_Descendants, cond)
             if items.Length > 5:
                 break
@@ -101,22 +101,26 @@ class DiscordUI:
                 continue
         return False
 
-    # ---------- состояние ----------
     def state(self) -> dict | None:
         bs = self.buttons()
         if not bs:
             return None
-        mic = self.find(bs, MIC, exact=True)
-        deaf = self.find(bs, DEAFEN, exact=True)
+        toggles = [b for b in bs if b.pressed is not None]
+        mic = self.find(toggles, MIC, exact=True)
+        deaf = self.find(toggles, DEAFEN, exact=True)
         return {"mic_muted": mic.pressed if mic else None, "deafened": deaf.pressed if deaf else None,
                 "in_call": self.find(bs, DISCONNECT, exact=True) is not None,
                 "sharing": self.find(bs, STOP_SHARE) is not None}
 
-    # ---------- действия ----------
-    def _find_fresh(self, names, exact: bool = True, tries: int = 3) -> Button | None:
-        """Кнопка по названию; дерево Discord иногда достраивается не сразу — спрашиваем ещё раз."""
+    def _find_fresh(self, names, exact: bool = True, tries: int = 3, toggle: bool = False) -> Button | None:
+        """Кнопка по названию; дерево Discord иногда достраивается не сразу — спрашиваем ещё раз.
+        toggle=True — только переключатель с состоянием: кнопок «Заглушить» бывает несколько (в панели звонка
+        есть такая же без состояния), нажимать нужно ту, что знает, включён микрофон или нет."""
         for attempt in range(tries):
-            b = self.find(self.buttons(), names, exact)
+            bs = self.buttons()
+            if toggle:
+                bs = [b for b in bs if b.pressed is not None]
+            b = self.find(bs, names, exact)
             if b is not None:
                 return b
             time.sleep(0.5)
@@ -124,16 +128,16 @@ class DiscordUI:
 
     def set_toggle(self, names, want: bool | None) -> tuple[bool, bool | None]:
         """Нажать переключатель, если его состояние не то, что нужно. (удалось, новое состояние)."""
-        b = self._find_fresh(names)
+        b = self._find_fresh(names, toggle=True)
         if b is None:
             return False, None
-        if want is not None and b.pressed is not None and b.pressed == want:
-            return True, want                       # уже как надо — не трогаем
+        if want is not None and b.pressed == want:
+            return True, want
         if not self.click(b):
             return False, b.pressed
         time.sleep(0.3)
-        after = self.find(self.buttons(), names, exact=True)
-        return True, after.pressed if after else None
+        after = self._find_fresh(names, toggle=True, tries=2)
+        return True, after.pressed if after else (not b.pressed)
 
     def share_screen(self, start: bool) -> str:
         bs = self.buttons()
@@ -149,7 +153,7 @@ class DiscordUI:
             return "no_call"
         if not self.click(share):
             return "failed"
-        deadline = time.time() + 6       # окно выбора: вкладка «Экраны» → первый экран → «Прямой эфир»
+        deadline = time.time() + 6
         picked = False
         while time.time() < deadline:
             time.sleep(0.5)
@@ -170,7 +174,7 @@ class DiscordUI:
             go = self.find(bs, GO_LIVE)
             if go and self.click(go):
                 return "started"
-        return "picker"                  # окно выбора открыто, но кнопку запуска не нашли — дальше вручную
+        return "picker"
 
 
 _ui: DiscordUI | None = None

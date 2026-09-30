@@ -88,6 +88,7 @@ class JarvisApp:
         self._update_timer.start(6 * 3600 * 1000)
         QTimer.singleShot(60000, self.check_updates)
         self.bridge.restart.connect(self.restart_after_update)
+        self.bridge.theme.connect(self.set_accent)
 
         self._make_tray()
         if start_minimized:
@@ -222,6 +223,22 @@ class JarvisApp:
             self.overlay.apply_settings()
         self._sync_menus()
 
+    def set_accent(self, color: str) -> None:
+        """Сменить цвет интерфейса сразу, без перезапуска (окно, ядро, мини-ядро, трей-меню)."""
+        from jarvis.ui import theme
+        from jarvis.ui.style import QSS
+
+        theme.set_accent(color)
+        self.settings.set("ui.theme.accent", theme.accent())
+        self.qt.setStyleSheet(theme.qss(QSS))
+        root = self.window.centralWidget()
+        if hasattr(root, "_cache"):
+            root._cache = None
+        self.window.update()
+        for w in self.window.findChildren(type(self.window.newsp)):
+            w.update()
+        self.overlay.update()
+
     def set_setting(self, key: str, value) -> None:
         """Настройка, которую читает сам ассистент (голосовые записи, режим разработчика) — через его Settings,
         чтобы изменение применилось сразу, без перезапуска."""
@@ -305,7 +322,10 @@ def run_gui(start_minimized: bool | None = None) -> int:
         pass
     app = QApplication(sys.argv)
     app.setApplicationName("J.A.R.V.I.S.")
-    app.setStyleSheet(QSS)
+    from jarvis.ui import theme
+
+    theme.set_accent(Settings().get("ui.theme.accent", theme.BASE.name()) or theme.BASE.name())
+    app.setStyleSheet(theme.qss(QSS))
     app.setWindowIcon(make_icon())
     app.setQuitOnLastWindowClosed(False)
     winapi.foreground = winapi.ForegroundTracker()

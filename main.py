@@ -115,6 +115,11 @@ def main() -> None:
     parser.add_argument("--autostart", action="store_true", help="запуск вместе с Windows")
     args = parser.parse_args()
     setup_logging(args.verbose)
+    from jarvis.config import Settings
+    from jarvis.utils import net
+
+    net.apply_proxy(Settings())
+    net.watch(Settings())
 
     if args.spotify_login:
         from jarvis.services import spotify

@@ -412,7 +412,7 @@ class GeminiLive:
                 pass
         q = getattr(self, "_first_q", None)
         if q is not None:
-            q.put(self._NO_AUDIO)   # если сессия ещё ждёт первую фразу
+            q.put(self._NO_AUDIO)
 
     def run_session(self, first_pcm: bytes | None = None) -> bool:
         """Провести живой разговор (блокирует вызывающий поток до конца сессии). False — не удалось подключиться."""

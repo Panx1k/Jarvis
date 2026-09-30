@@ -17,3 +17,4 @@ __pycache__/
 .vscode/
 Thumbs.db
 /config/update_state.json
+/update_backup/

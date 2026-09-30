@@ -83,7 +83,9 @@ class CoreRenderer:
         speed = {"idle": 0.25, "listening": 0.6, "thinking": 2.2, "executing": 3.2, "speaking": 0.8,
                  "error": 0.15}.get(self.state, 0.3)
         self._phase += dt * speed
-        target = STATE_COLORS.get(self.state, STATE_COLORS["idle"])
+        from jarvis.ui import theme
+
+        target = theme.shift(STATE_COLORS.get(self.state, STATE_COLORS["idle"]))
         c = self._color
         kc = 1 - math.exp(-dt * 6)
         self._color = QColor(int(c.red() + (target.red() - c.red()) * kc),

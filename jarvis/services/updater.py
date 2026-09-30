@@ -39,7 +39,7 @@ CREATE_NO_WINDOW = 0x08000000
 @dataclass
 class UpdateInfo:
     available: bool
-    method: str                  # zip | git | none
+    method: str
     latest: str = ""
     installed: str = ""
     message: str = ""
@@ -104,9 +104,19 @@ def check() -> UpdateInfo:
     return UpdateInfo(installed != latest["sha"], "zip", latest["sha"], installed, latest["message"], latest["date"])
 
 
+def check_zip() -> UpdateInfo:
+    latest = latest_commit()
+    return UpdateInfo(True, "zip", latest["sha"], _state().get("sha", ""), latest["message"], latest["date"])
+
+
+def _same(a: bytes, b: bytes) -> bool:
+    """Одинаковы по содержимому (концы строк CRLF/LF не в счёт — git на Windows меняет их сам)."""
+    return a.replace(b"\r\n", b"\n") == b.replace(b"\r\n", b"\n")
+
+
 def _req_hash() -> str:
     try:
-        return hashlib.sha256((ROOT / "requirements.txt").read_bytes()).hexdigest()
+        return hashlib.sha256((ROOT / "requirements.txt").read_bytes().replace(b"\r\n", b"\n")).hexdigest()
     except OSError:
         return ""
 
@@ -151,14 +161,14 @@ def apply_zip(info: UpdateInfo, progress=None) -> str:
             continue
         target = ROOT / rel
         if rel in KEEP_IF_EXISTS and target.exists():
-            continue                                    # пользователь мог поменять — не затираем
-        if target.exists() and target.read_bytes() == data:
+            continue
+        if target.exists() and _same(target.read_bytes(), data):
             continue
         added += not target.exists()
         changed += target.exists()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    for folder in MIRROR_DIRS:                          # удалённые из проекта модули — убрать, чтобы не мешали
+    for folder in MIRROR_DIRS:
         for path in (ROOT / folder).rglob("*.py"):
             rel = path.relative_to(ROOT).as_posix()
             if rel not in files:
@@ -171,18 +181,58 @@ def apply_zip(info: UpdateInfo, progress=None) -> str:
     return f"Обновлено: изменено файлов {changed}, новых {added}, удалено {removed}."
 
 
+def _run_git(git: str, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run([git, "-C", str(ROOT), *args], capture_output=True, text=True, timeout=timeout,
+                          creationflags=CREATE_NO_WINDOW)
+
+
 def apply_git(progress=None) -> str:
+    """git pull; если мешают изменённые файлы — сохранить их в update_backup/ и привести код к версии с GitHub.
+    Копию со своими (неотправленными) коммитами не трогаем — это копия разработчика."""
     git = _git()
     if not git:
         return "Эта копия из git — обновите её через GitHub Desktop (Fetch → Pull) или git pull."
+    say = progress or (lambda text: None)
+    _, branch = repo()
     before = _req_hash()
-    r = subprocess.run([git, "-C", str(ROOT), "pull", "--ff-only"], capture_output=True, text=True, timeout=120,
-                       creationflags=CREATE_NO_WINDOW)
-    if r.returncode != 0:
-        return "git pull не удался (есть свои изменения?) — обновите через GitHub Desktop."
+    fetched = _run_git(git, "fetch", "origin", branch).returncode == 0
+    if not fetched:
+        fetched = _run_git(git, "-c", "http.sslBackend=openssl", "fetch", "origin", branch).returncode == 0
+    if not fetched:
+        say("git не может связаться с GitHub — скачиваю обновление архивом…")
+        try:
+            return apply_zip(check_zip(), progress)
+        except Exception as exc:
+            log.warning("Обновление архивом не удалось: %s", exc)
+            return "Не удалось связаться с GitHub. Проверьте интернет (или VPN) и попробуйте ещё раз."
+    upstream = f"origin/{branch}"
+    if _run_git(git, "merge", "--ff-only", upstream).returncode == 0:
+        if _req_hash() != before:
+            _install_requirements()
+        return "Обновлено."
+    ahead = _run_git(git, "rev-list", "--count", f"{upstream}..HEAD").stdout.strip()
+    if ahead and ahead != "0":
+        return ("В этой копии есть свои коммиты, которых нет на GitHub, — обновите её через GitHub Desktop, "
+                "автоматически не трогаю.")
+    changed = [line[3:].strip().strip('"') for line in
+               _run_git(git, "status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line.strip()]
+    backup = ROOT / "update_backup" / time.strftime("%Y%m%d-%H%M%S")
+    for rel in changed:
+        src = ROOT / rel
+        if src.is_file():
+            (backup / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, backup / rel)
+    say("Изменённые файлы сохранены, привожу код к версии с GitHub…")
+    if _run_git(git, "reset", "--hard", upstream).returncode != 0:
+        return "Не удалось обновить — обновите через GitHub Desktop."
+    for rel in KEEP_IF_EXISTS:
+        saved = backup / rel
+        if saved.is_file():
+            shutil.copy2(saved, ROOT / rel)
     if _req_hash() != before:
         _install_requirements()
-    return "Обновлено через git pull."
+    note = f" Ваши изменённые файлы сохранены в {backup.relative_to(ROOT)}." if changed else ""
+    return "Обновлено." + note
 
 
 def apply(info: UpdateInfo | None = None, progress=None) -> tuple[bool, str]:

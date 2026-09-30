@@ -43,6 +43,27 @@ class SettingsDialog(QDialog):
         self.minimized.toggled.connect(lambda v: s.set("ui.start_minimized", v))
         lay.addWidget(self.minimized)
 
+        from jarvis.ui import theme
+
+        lay.addWidget(_section("ИНТЕРФЕЙС"))
+        theme_row = QHBoxLayout()
+        self.theme_box = QComboBox()
+        for key, (title, color) in theme.PRESETS.items():
+            self.theme_box.addItem(title, color)
+        current = theme.accent().lower()
+        idx = next((i for i in range(self.theme_box.count()) if self.theme_box.itemData(i).lower() == current), -1)
+        if idx < 0:
+            self.theme_box.addItem(f"Свой цвет {current}", current)
+            idx = self.theme_box.count() - 1
+        self.theme_box.setCurrentIndex(idx)
+        self.theme_box.activated.connect(lambda row: controller.set_accent(self.theme_box.itemData(row)))
+        custom = QPushButton("Свой цвет…")
+        custom.clicked.connect(self._pick_color)
+        theme_row.addWidget(QLabel("Цвет"))
+        theme_row.addWidget(self.theme_box, 1)
+        theme_row.addWidget(custom)
+        lay.addLayout(theme_row)
+
         lay.addWidget(_section("ГОЛОС"))
         a = controller.assistant
         self.replies = QCheckBox("Отвечать голосом (выключено — только текст)")
@@ -177,6 +198,18 @@ class SettingsDialog(QDialog):
         box.setChecked(bool(self.c.settings.get(f"ui.overlay.{key}", default)))
         box.toggled.connect(lambda v: self.c.set_overlay(key, v))
         return box
+
+    def _pick_color(self) -> None:
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        from jarvis.ui import theme
+
+        color = QColorDialog.getColor(QColor(theme.accent()), self, "Цвет интерфейса")
+        if color.isValid():
+            self.c.set_accent(color.name())
+            self.theme_box.addItem(f"Свой цвет {color.name()}", color.name())
+            self.theme_box.setCurrentIndex(self.theme_box.count() - 1)
 
     def _check_updates(self) -> None:
         self.update_label.setText("Проверяю…")

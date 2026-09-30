@@ -53,7 +53,8 @@ class AssistantListener:
     def on_voice_output(self, kind: str, info: dict) -> None: ...
     def on_debug(self, text: str) -> None: ...
     def on_news(self, category: str, info: dict) -> None: ...
-    def on_restart(self) -> None: ...                     # JARVIS обновился — перезапустить приложение
+    def on_restart(self) -> None: ...
+    def on_theme(self, color: str) -> None: ...
 
 
 @dataclass
@@ -693,9 +694,11 @@ class Assistant:
         self.dialog.last_tool = name
         self.listener.on_action(aid, announce, "ok" if r.ok else "error", r.message)
         self.listener.on_tool(name, "ok" if r.ok else "error", r.message)
+        if r.ok and r.data.get("theme"):
+            self.listener.on_theme(r.data["theme"])
         if self.rt.restart_requested:
             self.rt.restart_requested = False
-            threading.Timer(7.0, self.listener.on_restart).start()   # сначала договорить ответ
+            threading.Timer(7.0, self.listener.on_restart).start()
         if r.followup:
             f_tool, f_args = r.followup
             self._ask_confirmation(f_tool, f_args, r.message)

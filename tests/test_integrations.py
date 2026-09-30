@@ -213,7 +213,6 @@ def test_spotify_play_verifies_and_wakes_device(monkeypatch):
         client.play({"uris": ["spotify:track:1"]})
 
 
-# ---------- Discord через UI Automation ----------
 class FakeDiscordUI:
     """Кнопки Discord: имя → нажата ли. click меняет состояние, как настоящая кнопка."""
 
@@ -259,7 +258,7 @@ def test_discord_mute_uses_real_state(monkeypatch):
     d = _discord(monkeypatch, fake)
     r = d.discord_toggle_mute(NS(), "выключи")
     assert r.ok and r.data["muted"] is True and fake.clicks == ["Заглушить"]
-    r = d.discord_toggle_mute(NS(), "выключи")                  # уже выключен — не переключаем обратно
+    r = d.discord_toggle_mute(NS(), "выключи")
     assert r.ok and r.data["muted"] is True and fake.clicks == ["Заглушить"]
     r = d.discord_toggle_deafen(NS(), "выключи")
     assert r.data["deafened"] is True
@@ -273,3 +272,47 @@ def test_discord_screen_share_flow(monkeypatch):
     assert fake.clicks[:1] == ["Продемонстрируйте свой экран"] and "Прямой эфир" in fake.clicks
     r = d.discord_screen_share(NS(), "выключи")
     assert r.ok and r.data["result"] == "stopped" and fake.clicks[-1] == "Прекратить стрим"
+
+
+THEME_CHECK = r'''
+from PySide6.QtGui import QColor
+from jarvis.ui import theme
+base = "#brand { color: #00d8ff; background: rgba(0, 216, 255, 0.2); } #err { color: #ff4f65; }"
+theme.set_accent("#ff3b3b")
+out = theme.qss(base)
+assert out.startswith("#brand {") and "#err {" in out, out
+assert "#00d8ff" not in out and "rgba(0, 216, 255" not in out, out
+assert "#ff4f65" in out, out
+assert theme.shift(QColor(0, 200, 255)).red() > 200
+theme.set_accent(theme.BASE.name())
+assert theme.qss(base) == base
+print("ok")
+'''
+
+
+def test_theme_recolors_colors_not_selectors():
+    """В отдельном процессе: Qt после COM-библиотек инструментов (как в тестах) падает, в приложении порядок иной."""
+    import subprocess
+    import sys
+
+    from jarvis.config import ROOT
+
+    r = subprocess.run([sys.executable, "-c", THEME_CHECK], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and "ok" in r.stdout, r.stderr[-800:]
+
+
+def test_proxy_auto_uses_local_vpn_proxy(monkeypatch):
+    import os
+
+    from jarvis.utils import net
+
+    monkeypatch.setattr(net, "_user_set", False)
+    monkeypatch.setattr(net, "_applied", None)
+    monkeypatch.setattr(net, "_registry_proxy", lambda: None)
+    monkeypatch.setattr(net, "_open", lambda addr, timeout=0.3: addr == "127.0.0.1:2080")
+    monkeypatch.setenv("JARVIS_PROXY", "auto")
+    for v in net._VARS:
+        monkeypatch.delenv(v, raising=False)
+    assert net.apply_proxy() == "http://127.0.0.1:2080" and os.environ["HTTPS_PROXY"] == "http://127.0.0.1:2080"
+    monkeypatch.setattr(net, "_open", lambda addr, timeout=0.3: False)
+    assert net.apply_proxy() is None and "HTTPS_PROXY" not in os.environ

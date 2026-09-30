@@ -155,7 +155,9 @@ def discord_toggle_mute(ctx, action: str | None = None) -> ToolResult:
         from jarvis.services import discord_ui
 
         ok, muted = ui.set_toggle(discord_ui.MIC, None if want == "toggle" else want == "off")
-        if ok and muted is not None:
+        if ok:
+            if muted is None:
+                return ToolResult(True, "Переключил микрофон в Discord.")
             return ToolResult(True, "Микрофон в Discord выключен." if muted else "Микрофон в Discord включён.",
                               {"muted": muted})
     if not _press_in_discord([0x11, 0x10, 0x4D]):
@@ -177,7 +179,9 @@ def discord_toggle_deafen(ctx, action: str | None = None) -> ToolResult:
         from jarvis.services import discord_ui
 
         ok, deaf = ui.set_toggle(discord_ui.DEAFEN, None if want == "toggle" else want == "off")
-        if ok and deaf is not None:
+        if ok:
+            if deaf is None:
+                return ToolResult(True, "Переключил звук в Discord.")
             return ToolResult(True, "Звук в Discord выключен." if deaf else "Звук в Discord включён.",
                               {"deafened": deaf})
     if not _press_in_discord([0x11, 0x10, 0x44]):
