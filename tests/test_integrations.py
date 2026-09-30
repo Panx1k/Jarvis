@@ -211,3 +211,65 @@ def test_spotify_play_verifies_and_wakes_device(monkeypatch):
     client.api = lambda method, path, **kw: {"is_playing": False} if path == "/me/player" and method == "GET" else None
     with pytest.raises(sp.SpotifyError):
         client.play({"uris": ["spotify:track:1"]})
+
+
+# ---------- Discord через UI Automation ----------
+class FakeDiscordUI:
+    """Кнопки Discord: имя → нажата ли. click меняет состояние, как настоящая кнопка."""
+
+    def __init__(self, **pressed):
+        from jarvis.services.discord_ui import Button
+
+        self.Button = Button
+        self.state_map = {"Заглушить": False, "Откл. звук": False, "Отключиться": None,
+                          "Продемонстрируйте свой экран": None, **pressed}
+        self.clicks = []
+
+    def buttons(self, root=None):
+        return [self.Button(n, n, p) for n, p in self.state_map.items()]
+
+    def click(self, b):
+        self.clicks.append(b.name)
+        if b.name == "Продемонстрируйте свой экран":
+            self.state_map.update({"Экраны": None, "Экран 1": None, "Прямой эфир": None})
+        elif b.name == "Прямой эфир":
+            for k in ("Экраны", "Экран 1", "Прямой эфир", "Продемонстрируйте свой экран"):
+                self.state_map.pop(k, None)
+            self.state_map["Прекратить стрим"] = None
+        elif isinstance(self.state_map.get(b.name), bool):
+            self.state_map[b.name] = not self.state_map[b.name]
+        return True
+
+
+def _discord(monkeypatch, fake):
+    from jarvis.services import discord_ui
+    from jarvis.tools import discord
+
+    real = discord_ui.DiscordUI
+    for name in ("set_toggle", "share_screen", "state", "_find_fresh"):
+        monkeypatch.setattr(fake, name, getattr(real, name).__get__(fake), raising=False)
+    monkeypatch.setattr(fake, "find", real.find, raising=False)
+    monkeypatch.setattr(discord, "_ui", lambda: fake)
+    monkeypatch.setattr(discord_ui.time, "sleep", lambda s: None)
+    return discord
+
+
+def test_discord_mute_uses_real_state(monkeypatch):
+    fake = FakeDiscordUI()
+    d = _discord(monkeypatch, fake)
+    r = d.discord_toggle_mute(NS(), "выключи")
+    assert r.ok and r.data["muted"] is True and fake.clicks == ["Заглушить"]
+    r = d.discord_toggle_mute(NS(), "выключи")                  # уже выключен — не переключаем обратно
+    assert r.ok and r.data["muted"] is True and fake.clicks == ["Заглушить"]
+    r = d.discord_toggle_deafen(NS(), "выключи")
+    assert r.data["deafened"] is True
+
+
+def test_discord_screen_share_flow(monkeypatch):
+    fake = FakeDiscordUI()
+    d = _discord(monkeypatch, fake)
+    r = d.discord_screen_share(NS(), "включи")
+    assert r.ok and r.data["result"] == "started"
+    assert fake.clicks[:1] == ["Продемонстрируйте свой экран"] and "Прямой эфир" in fake.clicks
+    r = d.discord_screen_share(NS(), "выключи")
+    assert r.ok and r.data["result"] == "stopped" and fake.clicks[-1] == "Прекратить стрим"

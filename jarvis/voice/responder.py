@@ -84,6 +84,8 @@ INFORMATIVE = {"get_time", "get_date", "get_weather", "get_volume", "media_statu
                "spotify_connect", "spotify_play", "spotify_play_liked", "spotify_now_playing", "spotify_like",
                "spotify_queue", "spotify_shuffle", "spotify_repeat", "spotify_volume", "spotify_playlists",
                "discord_open", "discord_send_message", "discord_answer_call", "discord_decline_call", "discord_status",
+               "discord_screen_share", "discord_camera", "discord_disconnect", "discord_toggle_mute",
+               "discord_toggle_deafen",
                "window_minimize", "window_maximize", "window_show", "show_desktop", "news_open"}
 
 

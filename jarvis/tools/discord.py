@@ -117,22 +117,136 @@ def _press_in_discord(vks: list[int]) -> bool:
     return True
 
 
-@tool("discord_toggle_mute", "Включить/выключить свой микрофон в Discord (переключатель, Ctrl+Shift+M).",
-      announce="Переключаю микрофон в Discord", category="discord",
-      patterns=[r"^(?:выключи|включи|отключи|заглуши|замьють|размьють|вруби|выруби)\s+(?:мне\s+)?(?:мой\s+)?"
-                r"(?:микрофон|микро|микрик|мик)(?:\s+(?:в|на)\s+(?:дискорд\w*|discord))?$",
-                r"^(?:мут|замутить|замуть|размуть)\s+(?:в\s+)?(?:дискорд\w*|discord)$"])
-def discord_toggle_mute(ctx) -> ToolResult:
+DS = r"(?:дискорд\w*|discord|дс\w*|дсе)"
+OFF_WORDS = ("выключи", "отключи", "заглуши", "замьють", "выруби", "мут", "замутить", "замуть", "убери", "останови",
+             "прекрати", "выключить", "оглуши", "off")
+ON_WORDS = ("включи", "размьють", "вруби", "размуть", "верни", "запусти", "начни", "включить", "on")
+ACTION = {"type": "string", "enum": ["on", "off", "toggle"],
+          "description": "on — включить, off — выключить, toggle — переключить"}
+
+
+def _want(action: str | None) -> str:
+    a = (action or "").lower().strip()
+    if a in ("on", "off", "toggle"):
+        return a
+    if any(a.startswith(w) for w in OFF_WORDS):
+        return "off"
+    if any(a.startswith(w) for w in ON_WORDS):
+        return "on"
+    return "toggle"
+
+
+def _ui():
+    from jarvis.services import discord_ui
+
+    return discord_ui.get() if _discord_window() else None
+
+
+@tool("discord_toggle_mute", "Микрофон в Discord: action=off — выключить (заглушить), on — включить, toggle — "
+      "переключить. Смотрит текущее состояние, окно Discord не переключает.",
+      params={"action": ACTION}, announce="Микрофон в Discord", category="discord",
+      patterns=[r"^(?P<action>выключи|включи|отключи|заглуши|замьють|размьють|вруби|выруби)\s+(?:мне\s+)?(?:мой\s+)?"
+                r"(?:микрофон|микро|микрик|мик)(?:\s+(?:в|на)\s+" + DS + r")?$",
+                r"^(?P<action>мут|замутить|замуть|размуть)\s+(?:в\s+)?" + DS + "$"])
+def discord_toggle_mute(ctx, action: str | None = None) -> ToolResult:
+    want = _want(action)
+    ui = _ui()
+    if ui is not None:
+        from jarvis.services import discord_ui
+
+        ok, muted = ui.set_toggle(discord_ui.MIC, None if want == "toggle" else want == "off")
+        if ok and muted is not None:
+            return ToolResult(True, "Микрофон в Discord выключен." if muted else "Микрофон в Discord включён.",
+                              {"muted": muted})
     if not _press_in_discord([0x11, 0x10, 0x4D]):
         return ToolResult(False, "Discord не запущен.")
     return ToolResult(True, "Переключил микрофон в Discord.")
 
 
-@tool("discord_toggle_deafen", "Включить/выключить звук (deafen) в Discord (переключатель, Ctrl+Shift+D).",
-      announce="Переключаю звук в Discord", category="discord",
-      patterns=[r"^(?:выключи|включи|отключи|заглуши|верни)\s+(?:звук|наушники)\s+(?:в|на)\s+(?:дискорд\w*|discord)$",
-                r"^(?:заглуши|оглуши)\s+(?:дискорд\w*|discord)$"])
-def discord_toggle_deafen(ctx) -> ToolResult:
+@tool("discord_toggle_deafen", "Звук/наушники в Discord (deafen): action=off — выключить звук, on — включить, "
+      "toggle — переключить.",
+      params={"action": ACTION}, announce="Звук в Discord", category="discord",
+      patterns=[r"^(?P<action>выключи|включи|отключи|заглуши|верни|вруби|выруби)\s+(?:мне\s+)?(?:звук|наушники|уши)"
+                r"\s+(?:в|на)\s+" + DS + "$",
+                r"^(?P<action>выключи|включи|отключи|верни|вруби|выруби)\s+(?:мне\s+)?наушники$",
+                r"^(?P<action>заглуши|оглуши)\s+" + DS + "$"])
+def discord_toggle_deafen(ctx, action: str | None = None) -> ToolResult:
+    want = _want(action)
+    ui = _ui()
+    if ui is not None:
+        from jarvis.services import discord_ui
+
+        ok, deaf = ui.set_toggle(discord_ui.DEAFEN, None if want == "toggle" else want == "off")
+        if ok and deaf is not None:
+            return ToolResult(True, "Звук в Discord выключен." if deaf else "Звук в Discord включён.",
+                              {"deafened": deaf})
     if not _press_in_discord([0x11, 0x10, 0x44]):
         return ToolResult(False, "Discord не запущен.")
     return ToolResult(True, "Переключил звук в Discord.")
+
+
+@tool("discord_screen_share", "Демонстрация экрана («демка», стрим) в голосовом канале Discord: action=on — "
+      "начать (выбирается основной экран), off — прекратить.",
+      params={"action": ACTION}, announce="Демонстрация экрана в Discord", category="discord",
+      patterns=[r"^(?P<action>включи|вруби|запусти|начни|выключи|выруби|останови|прекрати|убери|отключи)\s+(?:мне\s+)?"
+                r"(?:демк\w*|демонстраци\w*(?:\s+экрана)?|стрим\w*|трансляци\w*|шеринг)(?:\s+(?:в|на)\s+" + DS + r")?$",
+                r"^(?P<action>покажи)\s+(?:мой\s+)?экран\s+(?:в|на)\s+" + DS + "$"])
+def discord_screen_share(ctx, action: str | None = None) -> ToolResult:
+    want = _want(action)
+    if action and action.lower().startswith("покажи"):
+        want = "on"
+    ui = _ui()
+    if ui is None:
+        return ToolResult(False, "Discord не запущен.")
+    if want == "toggle":
+        want = "off" if ui.state() and ui.state().get("sharing") else "on"
+    result = ui.share_screen(want == "on")
+    messages = {
+        "started": (True, "Демонстрация экрана в Discord запущена."),
+        "stopped": (True, "Демонстрация экрана остановлена."),
+        "already": (True, "Демонстрация экрана уже идёт."),
+        "not_sharing": (True, "Демонстрация экрана и так не идёт."),
+        "no_call": (False, "Сначала зайдите в голосовой канал Discord — демонстрация запускается из звонка."),
+        "picker": (True, "Открыл выбор экрана в Discord — выберите, что показать, и нажмите «Прямой эфир»."),
+        "failed": (False, "Не получилось нажать кнопку демонстрации в Discord."),
+    }
+    ok, text = messages.get(result, (False, "Не получилось."))
+    return ToolResult(ok, text, {"result": result})
+
+
+@tool("discord_camera", "Камера в голосовом канале Discord: action=on — включить, off — выключить.",
+      params={"action": ACTION}, announce="Камера в Discord", category="discord",
+      patterns=[r"^(?P<action>включи|выключи|вруби|выруби|отключи)\s+(?:мне\s+)?(?:камеру|вебку|вебкамеру)"
+                r"(?:\s+(?:в|на)\s+" + DS + r")?$"])
+def discord_camera(ctx, action: str | None = None) -> ToolResult:
+    from jarvis.services import discord_ui
+
+    ui = _ui()
+    if ui is None:
+        return ToolResult(False, "Discord не запущен.")
+    want = _want(action)
+    names = discord_ui.CAMERA_OFF if want == "off" else discord_ui.CAMERA_ON
+    b = ui._find_fresh(names, exact=False)
+    if b is None:
+        if want == "off":
+            return ToolResult(True, "Камера и так выключена.")
+        return ToolResult(False, "Не вижу кнопку камеры — вы в голосовом канале?")
+    ui.click(b)
+    return ToolResult(True, "Камера включена." if want != "off" else "Камера выключена.")
+
+
+@tool("discord_disconnect", "Выйти из голосового канала Discord (положить трубку).",
+      announce="Выхожу из голосового канала", category="discord",
+      patterns=[r"^(?:выйди|ливни|отключись|уйди|выкинь меня)\s+(?:из\s+)?(?:войса|голосового(?:\s+канала)?|звонка|"
+                r"голосовухи|канала)(?:\s+(?:в\s+)?" + DS + r")?$", r"^(?:положи трубку|сбрось звонок)$"])
+def discord_disconnect(ctx) -> ToolResult:
+    from jarvis.services import discord_ui
+
+    ui = _ui()
+    if ui is None:
+        return ToolResult(False, "Discord не запущен.")
+    b = ui._find_fresh(discord_ui.DISCONNECT)
+    if b is None:
+        return ToolResult(True, "Вы и так не в голосовом канале.")
+    ui.click(b)
+    return ToolResult(True, "Вышел из голосового канала.")
