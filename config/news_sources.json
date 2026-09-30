@@ -1,0 +1,47 @@
+{
+  "_comment": "Источники новостей по категориям (игровые — в gaming_sources.json). type: rss или telegram. priority 0..1 — вес при ранжировании. Для политики и общих новостей намеренно собраны разные агентства и редакции: JARVIS пересказывает нейтрально и указывает, кто что сообщает.",
+  "categories": {
+    "general": [
+      {"name": "Интерфакс", "type": "rss", "url": "https://www.interfax.ru/rss.asp", "priority": 0.9},
+      {"name": "ТАСС", "type": "rss", "url": "https://tass.ru/rss/v2.xml", "priority": 0.85},
+      {"name": "Lenta.ru", "type": "rss", "url": "https://lenta.ru/rss/news", "priority": 0.75},
+      {"name": "РБК", "type": "rss", "url": "https://rssexport.rbc.ru/rbcnews/news/30/full.rss", "priority": 0.8},
+      {"name": "BBC News Русская служба", "type": "rss", "url": "https://feeds.bbci.co.uk/russian/rss.xml", "priority": 0.8},
+      {"name": "DW", "type": "rss", "url": "https://rss.dw.com/xml/rss-ru-all", "priority": 0.75}
+    ],
+    "politics": [
+      {"name": "Интерфакс", "type": "rss", "url": "https://www.interfax.ru/rss.asp", "priority": 0.9},
+      {"name": "ТАСС", "type": "rss", "url": "https://tass.ru/rss/v2.xml", "priority": 0.85},
+      {"name": "Коммерсантъ", "type": "rss", "url": "https://www.kommersant.ru/RSS/news.xml", "priority": 0.85},
+      {"name": "BBC News Русская служба", "type": "rss", "url": "https://feeds.bbci.co.uk/russian/rss.xml", "priority": 0.8},
+      {"name": "DW", "type": "rss", "url": "https://rss.dw.com/xml/rss-ru-all", "priority": 0.8}
+    ],
+    "tech": [
+      {"name": "Хабр", "type": "rss", "url": "https://habr.com/ru/rss/news/?fl=ru", "priority": 0.9},
+      {"name": "IXBT Games (Telegram)", "type": "telegram", "channel": "ixbtgames", "priority": 0.6},
+      {"name": "The Verge AI", "type": "rss", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "priority": 0.7}
+    ],
+    "ai": [
+      {"name": "The Verge AI", "type": "rss", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "priority": 0.9},
+      {"name": "Хабр", "type": "rss", "url": "https://habr.com/ru/rss/news/?fl=ru", "priority": 0.8, "keywords": ["ии", "нейросет", "ai", "gpt", "llm", "openai", "anthropic", "claude", "gemini", "искусственн", "машинн"]}
+    ],
+    "science": [
+      {"name": "N+1", "type": "rss", "url": "https://nplus1.ru/rss", "priority": 0.9},
+      {"name": "Naked Science", "type": "rss", "url": "https://naked-science.ru/feed", "priority": 0.8}
+    ],
+    "space": [
+      {"name": "NASA", "type": "rss", "url": "https://www.nasa.gov/news-release/feed/", "priority": 0.9},
+      {"name": "N+1", "type": "rss", "url": "https://nplus1.ru/rss", "priority": 0.8, "keywords": ["космос", "космич", "nasa", "spacex", "роскосмос", "марс", "луна", "лун", "ракет", "спутник", "орбит", "телескоп", "астроном"]},
+      {"name": "Naked Science", "type": "rss", "url": "https://naked-science.ru/feed", "priority": 0.7, "keywords": ["космос", "космич", "nasa", "spacex", "марс", "лун", "ракет", "спутник", "телескоп", "астроном", "галакти"]}
+    ],
+    "business": [
+      {"name": "РБК", "type": "rss", "url": "https://rssexport.rbc.ru/rbcnews/news/30/full.rss", "priority": 0.9},
+      {"name": "Коммерсантъ", "type": "rss", "url": "https://www.kommersant.ru/RSS/news.xml", "priority": 0.85},
+      {"name": "Интерфакс", "type": "rss", "url": "https://www.interfax.ru/rss.asp", "priority": 0.8, "keywords": ["рубл", "банк", "акци", "нефт", "компани", "рынок", "курс", "инфляц", "ставк", "бизнес", "эконом"]}
+    ],
+    "sports": [
+      {"name": "Sports.ru", "type": "rss", "url": "https://www.sports.ru/rss/all_news.xml", "priority": 0.9},
+      {"name": "Cybersport.ru", "type": "rss", "url": "https://www.cybersport.ru/rss/materials", "priority": 0.6}
+    ]
+  }
+}

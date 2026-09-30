@@ -1,0 +1,37 @@
+{
+  "_comment": "Источники игровых новостей. type: telegram (публичный канал, читается через t.me/s/<channel>) или rss. priority 0..1 — вес в ранжировании (Telegram — приоритет). topics — к каким темам источник относится особенно (playstation, xbox, nintendo, steam, pc, hardware, esports, gta, insider); без topics — общий игровой. Добавляйте и удаляйте источники свободно; каналы без свежих постов просто не дают новостей.",
+  "sources": [
+    {"name": "Игромания (Telegram)", "type": "telegram", "channel": "igromania", "priority": 1.0},
+    {"name": "StopGame (Telegram)", "type": "telegram", "channel": "stopgameru", "priority": 1.0},
+    {"name": "IXBT Games (Telegram)", "type": "telegram", "channel": "ixbtgames", "priority": 1.0, "topics": ["hardware", "pc"]},
+    {"name": "DTF News (Telegram)", "type": "telegram", "channel": "dtfru", "priority": 1.0},
+    {"name": "Zone of Games (Telegram)", "type": "telegram", "channel": "zoneofgames", "priority": 0.95},
+    {"name": "VGTimes (Telegram)", "type": "telegram", "channel": "vgtimes", "priority": 0.95, "topics": ["insider"]},
+    {"name": "Rockstar Games (Telegram)", "type": "telegram", "channel": "rockstargames", "priority": 0.95, "topics": ["gta"]},
+
+    {"name": "PlayStation Blog", "type": "rss", "url": "https://blog.playstation.com/feed/", "priority": 0.9, "topics": ["playstation"], "official": true},
+    {"name": "Xbox Wire", "type": "rss", "url": "https://news.xbox.com/en-us/feed/", "priority": 0.9, "topics": ["xbox"], "official": true},
+    {"name": "Steam", "type": "rss", "url": "https://store.steampowered.com/feeds/news/", "priority": 0.9, "topics": ["steam", "pc"], "official": true},
+    {"name": "Nintendo Life", "type": "rss", "url": "https://www.nintendolife.com/feeds/latest", "priority": 0.8, "topics": ["nintendo"]},
+
+    {"name": "StopGame", "type": "rss", "url": "https://rss.stopgame.ru/rss_news.xml", "priority": 0.8},
+    {"name": "Игромания", "type": "rss", "url": "https://www.igromania.ru/rss/news.rss", "priority": 0.8},
+    {"name": "PlayGround", "type": "rss", "url": "https://www.playground.ru/rss/news.xml", "priority": 0.75},
+    {"name": "Cybersport.ru", "type": "rss", "url": "https://www.cybersport.ru/rss/materials", "priority": 0.75, "topics": ["esports"]},
+    {"name": "PC Gamer", "type": "rss", "url": "https://www.pcgamer.com/rss/", "priority": 0.7, "topics": ["pc", "steam", "hardware"]},
+    {"name": "IGN", "type": "rss", "url": "https://feeds.ign.com/ign/games-all", "priority": 0.7},
+    {"name": "GameSpot", "type": "rss", "url": "https://www.gamespot.com/feeds/game-news", "priority": 0.7},
+    {"name": "Eurogamer", "type": "rss", "url": "https://www.eurogamer.net/feed", "priority": 0.65}
+  ],
+  "topics": {
+    "playstation": ["playstation", "ps5", "ps4", "ps plus", "плейстейшн", "плойк", "dualsense", "sony interactive"],
+    "xbox": ["xbox", "иксбокс", "game pass", "геймпасс", "microsoft"],
+    "nintendo": ["nintendo", "switch", "нинтендо", "свитч", "mario", "zelda", "марио", "зельд"],
+    "steam": ["steam", "стим", "valve", "steam deck"],
+    "pc": ["pc", "пк", "steam", "epic games"],
+    "hardware": ["видеокарт", "nvidia", "amd", "rtx", "radeon", "процессор", "intel", "geforce"],
+    "esports": ["киберспорт", "esports", "турнир", "major", "мейджор", "the international", "navi", "cs2", "dota"],
+    "gta": ["gta", "гта", "grand theft auto", "rockstar", "рокстар"],
+    "insider": ["инсайд", "слух", "утечк", "leak", "rumor"]
+  }
+}
