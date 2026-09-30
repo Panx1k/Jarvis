@@ -116,6 +116,24 @@ class SettingsDialog(QDialog):
         self.debug.toggled.connect(lambda v: controller.set_setting("ui.debug", v))
         lay.addWidget(self.debug)
 
+        lay.addWidget(_section("ОБНОВЛЕНИЯ"))
+        up_row = QHBoxLayout()
+        self.update_label = QLabel("Проверьте, вышла ли новая версия на GitHub.")
+        self.update_label.setObjectName("subcaption")
+        self.update_label.setWordWrap(True)
+        self.check_btn = QPushButton("Проверить")
+        self.update_btn = QPushButton("Обновить")
+        self.update_btn.setEnabled(False)
+        self.check_btn.clicked.connect(self._check_updates)
+        self.update_btn.clicked.connect(self._install_update)
+        up_row.addWidget(self.update_label, 1)
+        up_row.addWidget(self.check_btn)
+        up_row.addWidget(self.update_btn)
+        lay.addLayout(up_row)
+        info = getattr(controller, "update_info", None)
+        if info is not None:
+            self._show_update(info)
+
         lay.addWidget(_section("OVERLAY · МИНИ-ЯДРО"))
         self.show_core = self._check("Показывать мини-ядро", "show", True)
         self.on_top = self._check("Поверх окон", "on_top", True)
@@ -159,6 +177,29 @@ class SettingsDialog(QDialog):
         box.setChecked(bool(self.c.settings.get(f"ui.overlay.{key}", default)))
         box.toggled.connect(lambda v: self.c.set_overlay(key, v))
         return box
+
+    def _check_updates(self) -> None:
+        self.update_label.setText("Проверяю…")
+        self.check_btn.setEnabled(False)
+        self.c.check_updates(manual=True, done=self._show_update)
+
+    def _show_update(self, info) -> None:
+        self.check_btn.setEnabled(True)
+        if info.error:
+            self.update_label.setText(info.error)
+        elif info.available and info.method == "git":
+            self.update_label.setText("Есть новая версия. Эта копия из git — обновите через GitHub Desktop (Pull).")
+        elif info.available:
+            self.update_label.setText(f"Доступно обновление: {info.message or info.latest[:7]} ({info.date[:10]}).")
+            self.update_btn.setEnabled(True)
+        else:
+            self.update_label.setText("У вас последняя версия.")
+
+    def _install_update(self) -> None:
+        self.update_btn.setEnabled(False)
+        self.check_btn.setEnabled(False)
+        self.update_label.setText("Скачиваю и устанавливаю… JARVIS перезапустится сам.")
+        self.c.install_update(done=lambda ok, text: self.update_label.setText(text))
 
     def _sample_check(self, text: str, key: str, value: bool) -> QCheckBox:
         box = QCheckBox(text)

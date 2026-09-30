@@ -59,6 +59,7 @@ class Bridge(QObject, AssistantListener):
     voice_output = Signal(str, object)
     debug = Signal(str)
     news = Signal(str, object)
+    restart = Signal()
 
     def on_state(self, state): self.state.emit(state)
     def on_message(self, role, text): self.message.emit(role, text)
@@ -74,6 +75,7 @@ class Bridge(QObject, AssistantListener):
     def on_voice_output(self, kind, info): self.voice_output.emit(kind, info)
     def on_debug(self, text): self.debug.emit(text)
     def on_news(self, category, info): self.news.emit(category, info)
+    def on_restart(self): self.restart.emit()
 
 
 def _short(text: str, limit: int = 160) -> str:

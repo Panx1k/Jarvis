@@ -32,6 +32,20 @@ class WakeResult:
     lang: str = "ru"
 
 
+STOP_WORDS = r"(?:стоп|стой|хватит|отбой|замолчи|помолчи|тихо|прекрати|перестань слушать|не слушай|stop|enough)"
+
+
+def is_stop_command(text: str) -> bool:
+    """«Стоп, Jarvis», «Jarvis, стоп», «хватит», «отбой» — замолчать и закончить разговор (снова ждать «Jarvis»)."""
+    words = [w for w in re.split(r"[\s,.!?…]+", normalize(text or "")) if w]
+    if not words or len(words) > 4:
+        return False
+    rest = [w for w in words if not (w in WAKE_VARIANTS or (len(w) >= 5 and max(similarity(w, v) for v in
+                                                                                    ("джарвис", "jarvis")) >= 0.8))
+            and w not in ("пожалуйста", "всё", "все", "уже")]
+    return bool(rest) and bool(re.fullmatch(STOP_WORDS, " ".join(rest)))
+
+
 def find_wake(text: str, max_position: int = 2) -> tuple[bool, int]:
     """Есть ли «Jarvis» среди первых слов фразы. Возвращает (найдено, индекс слова)."""
     words = [w for w in re.split(r"[\s,.!?]+", normalize(text)) if w]

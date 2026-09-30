@@ -53,6 +53,7 @@ class AssistantListener:
     def on_voice_output(self, kind: str, info: dict) -> None: ...
     def on_debug(self, text: str) -> None: ...
     def on_news(self, category: str, info: dict) -> None: ...
+    def on_restart(self) -> None: ...                     # JARVIS обновился — перезапустить приложение
 
 
 @dataclass
@@ -62,6 +63,7 @@ class Runtime:
     dialog: DialogContext
     registry: ToolRegistry
     apps: AppIndex
+    restart_requested: bool = False
 
 
 @dataclass
@@ -392,6 +394,13 @@ class Assistant:
     def _voice_utterance(self, pcm: bytes, wake, followup: bool) -> None:
         """Фраза из голосового цикла: «Jarvis, …» или продолжение диалога без активатора."""
         if self.live_mode and not followup:
+            from jarvis.voice.wake import is_stop_command
+
+            if any(is_stop_command(part) for part in (wake.text or "").split(" | ")):
+                if self.live.active:
+                    self.live.stop()
+                self.stop_conversation()
+                return
             wake_only = self._wake_only(pcm, wake)
             if wake_only:
                 self._ack()
@@ -582,9 +591,34 @@ class Assistant:
         m = self._wake_re.match(normalize(text))
         return text[m.end():].strip(" ,.!?") if m else text.strip()
 
+    def stop_conversation(self, announce: bool = True) -> None:
+        """«Стоп, Jarvis»: замолчать, закончить разговор (живой тоже) и снова ждать «Jarvis»."""
+        self.speaker.stop()
+        self._listen_stop.set()
+        self._awaiting_command = False
+        if self.pending:
+            pending, self.pending = self.pending, None
+            self.listener.on_confirm(None)
+            self._cancel_pending(pending)
+        if self.voice_loop:
+            self.voice_loop.cancel_followup()
+        if self.live and self.live.active:
+            self.live.stop()
+        self.listener.on_status("Жду «Jarvis»" if self.wake_enabled else "Готов к командам")
+        if announce:
+            from jarvis.voice.intents import ResponseIntent
+
+            self._say_only("Хорошо, сэр.", ResponseIntent("CANCELLED"))
+        self.listener.on_state("idle")
+
     def _handle(self, text: str, echo: bool = True, voice: bool = False, echo_text: str | None = None) -> None:
         if echo:
             self.listener.on_message("user", echo_text or text)
+        from jarvis.voice.wake import is_stop_command
+
+        if is_stop_command(text) and not self.pending:
+            self.stop_conversation()
+            return
         self.listener.on_state("thinking")
         command = self._strip_wake(text)
         self._calls = []
@@ -659,6 +693,9 @@ class Assistant:
         self.dialog.last_tool = name
         self.listener.on_action(aid, announce, "ok" if r.ok else "error", r.message)
         self.listener.on_tool(name, "ok" if r.ok else "error", r.message)
+        if self.rt.restart_requested:
+            self.rt.restart_requested = False
+            threading.Timer(7.0, self.listener.on_restart).start()   # сначала договорить ответ
         if r.followup:
             f_tool, f_args = r.followup
             self._ask_confirmation(f_tool, f_args, r.message)

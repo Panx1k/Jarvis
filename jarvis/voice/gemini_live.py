@@ -397,6 +397,23 @@ class GeminiLive:
         finally:
             self.active = False
 
+    def stop(self) -> None:
+        """Закончить живой разговор сейчас (из другого потока): «стоп, Jarvis», кнопка, Esc."""
+        state, loop, session = getattr(self, "_state", None), getattr(self, "_loop", None), getattr(self, "_session_obj",
+                                                                                                    None)
+        if state is not None:
+            state["closing"] = True
+        if getattr(self, "_player", None) is not None:
+            self._player.clear()
+        if loop is not None and session is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(session.close(), loop)
+            except RuntimeError:
+                pass
+        q = getattr(self, "_first_q", None)
+        if q is not None:
+            q.put(self._NO_AUDIO)   # если сессия ещё ждёт первую фразу
+
     def run_session(self, first_pcm: bytes | None = None) -> bool:
         """Провести живой разговор (блокирует вызывающий поток до конца сессии). False — не удалось подключиться."""
         self.begin()
@@ -418,6 +435,8 @@ class GeminiLive:
 
             client = genai.Client(api_key=self.key, http_options={"api_version": "v1beta"})
             async with client.aio.live.connect(model=self.model, config=config) as session:
+                self._session_obj, self._loop, self._state, self._player = (session, asyncio.get_running_loop(),
+                                                                           state, player)
                 log.info("Gemini Live: сессия открыта через %.2f с (%s)", time.monotonic() - self._t0, self.model)
                 try:
                     first_pcm = await asyncio.to_thread(self._first_q.get, True, 8.0)
@@ -443,7 +462,8 @@ class GeminiLive:
                     sender.cancel()
             return True
         finally:
-            while player.speaking:
+            self._session_obj = self._loop = self._state = self._player = None
+            while player.speaking and not state.get("closing"):
                 await asyncio.sleep(0.05)
             player.close()
             self._flush_turn(state)
@@ -535,6 +555,16 @@ class GeminiLive:
                     state["user_text"] += sc.input_transcription.text
                     state["last_activity"] = time.monotonic()
                     a.listener.on_transcript(state["user_text"].strip())
+                    from jarvis.voice.wake import is_stop_command
+
+                    if is_stop_command(state["user_text"]):
+                        log.info("Gemini Live: «%s» — заканчиваю разговор", state["user_text"].strip())
+                        player.clear()
+                        state["user_text"], state["reply_text"] = "", ""
+                        state["closing"] = True
+                        threading.Thread(target=a.stop_conversation, name="live-stop", daemon=True).start()
+                        await session.close()
+                        return
                 if msg.data and player.dropping:
                     pass
                 elif msg.data:

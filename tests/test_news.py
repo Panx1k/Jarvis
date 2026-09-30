@@ -176,3 +176,70 @@ def test_news_voice_intro_and_full_digest(mgr):
     assert spoken == r.message
     ri = classify(calls, r.message, spoken, "какие новости")
     assert ri.intent == "NEWS" and ri.dynamic
+
+
+def test_stop_command_detection():
+    from jarvis.voice.wake import is_stop_command
+
+    for text in ("стоп, Jarvis", "Jarvis, стоп", "Джарвис стоп.", "хватит", "отбой джарвис", "перестань слушать"):
+        assert is_stop_command(text), text
+    for text in ("стоп музыку", "поставь на стоп", "джарвис", "хватит играть музыку", "включи стоп-кадр"):
+        assert not is_stop_command(text), text
+
+
+def test_stop_command_ends_conversation():
+    from jarvis.core.assistant import Assistant, AssistantListener
+
+    said = []
+
+    class L(AssistantListener):
+        def on_message(self, role, text):
+            said.append((role, text))
+
+    a = Assistant(L(), enable_voice=False)
+    stopped = []
+    a.speaker = NS(stop=lambda: stopped.append(1), say=lambda *x, **k: None, speaking=False, last_spoken_at=0.0,
+                   name="fake")
+    a.voice_replies = False
+    try:
+        a._handle("стоп, Jarvis")
+        assert stopped and ("assistant", "Хорошо, сэр.") in said
+    finally:
+        a.shutdown()
+
+
+def test_updater_zip_keeps_user_files(tmp_path, monkeypatch):
+    """Обновление архивом: код заменяется, .env / settings.json / изменённые конфиги пользователя — нет."""
+    import io
+    import zipfile
+
+    from jarvis.services import updater
+
+    (tmp_path / "jarvis").mkdir()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "main.py").write_text("old", encoding="utf-8")
+    (tmp_path / "jarvis" / "old_module.py").write_text("x", encoding="utf-8")
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=secret", encoding="utf-8")
+    (tmp_path / "config" / "settings.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "config" / "news_sources.json").write_text("mine", encoding="utf-8")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, data in {"jarvis-main/main.py": "new", "jarvis-main/jarvis/core.py": "code",
+                           "jarvis-main/.env": "HACK", "jarvis-main/config/settings.json": "theirs",
+                           "jarvis-main/config/news_sources.json": "theirs", "jarvis-main/config/gaming_sources.json":
+                           "added", "jarvis-main/../evil.py": "x"}.items():
+            z.writestr(name, data)
+    monkeypatch.setattr(updater, "ROOT", tmp_path)
+    monkeypatch.setattr(updater, "STATE_FILE", tmp_path / "config" / "update_state.json")
+    monkeypatch.setattr(updater, "repo", lambda: ("user/jarvis", "main"))
+    monkeypatch.setattr(updater.requests, "get", lambda *a, **k: NS(content=buf.getvalue(), raise_for_status=lambda: None))
+    text = updater.apply_zip(updater.UpdateInfo(True, "zip", "abc123", "", "msg"))
+    assert (tmp_path / "main.py").read_text() == "new" and (tmp_path / "jarvis" / "core.py").exists()
+    assert not (tmp_path / "jarvis" / "old_module.py").exists()
+    assert (tmp_path / ".env").read_text() == "GEMINI_API_KEY=secret"
+    assert (tmp_path / "config" / "settings.json").read_text() == "{}"
+    assert (tmp_path / "config" / "news_sources.json").read_text() == "mine"
+    assert (tmp_path / "config" / "gaming_sources.json").read_text() == "added"
+    assert not (tmp_path.parent / "evil.py").exists()
+    assert "abc123" in (tmp_path / "config" / "update_state.json").read_text()
+    assert "Обновлено" in text

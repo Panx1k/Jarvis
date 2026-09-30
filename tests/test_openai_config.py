@@ -92,7 +92,8 @@ def test_no_key_in_source_tree():
                     with open(os.path.join(dirpath, f), encoding="utf-8") as fh:
                         assert not pattern.search(fh.read()), f
     with open(os.path.join(root, ".gitignore"), encoding="utf-8") as fh:
-        assert ".env" in fh.read().split()
+        rules = fh.read().split()
+        assert ".env" in rules or "/.env" in rules
 
 
 def test_search_files_and_open_by_number(tmp_path):

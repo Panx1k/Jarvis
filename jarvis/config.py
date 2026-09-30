@@ -167,7 +167,7 @@ class Settings:
         self.user_data: dict[str, Any] = {}
         if path.exists():
             try:
-                self.user_data = json.loads(path.read_text(encoding="utf-8"))
+                self.user_data = json.loads(path.read_text(encoding="utf-8-sig"))
                 self.data = _deep_merge(self.data, self.user_data)
             except Exception as exc:
                 log.error("Не удалось прочитать %s: %s — используются значения по умолчанию", path, exc)

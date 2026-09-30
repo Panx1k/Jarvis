@@ -82,6 +82,13 @@ class JarvisApp:
         self._news_timer.start(30 * 60 * 1000)
         QTimer.singleShot(20000, self._refresh_news)
 
+        self.update_info = None
+        self._update_timer = QTimer()
+        self._update_timer.timeout.connect(self.check_updates)
+        self._update_timer.start(6 * 3600 * 1000)
+        QTimer.singleShot(60000, self.check_updates)
+        self.bridge.restart.connect(self.restart_after_update)
+
         self._make_tray()
         if start_minimized:
             self.hide_to_background(first=True)
@@ -98,6 +105,50 @@ class JarvisApp:
     @property
     def assistant(self) -> Assistant | None:
         return self.window.assistant
+
+    def check_updates(self, manual: bool = False, done=None) -> None:
+        """Проверить GitHub в фоне; есть новая версия — сказать в ленте и в трее (один раз на версию)."""
+        import threading
+
+        from jarvis.services import updater
+
+        def work():
+            info = updater.check()
+            QTimer.singleShot(0, lambda: self._update_checked(info, manual, done))
+
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+
+    def _update_checked(self, info, manual: bool, done) -> None:
+        self.update_info = info
+        if done:
+            done(info)
+        if not info.available or info.method != "zip":
+            return
+        if not manual and self.settings.get("update.notified") == info.latest:
+            return
+        self.settings.set("update.notified", info.latest)
+        text = f"Доступно обновление JARVIS{': ' + info.message if info.message else ''}. Скажите «Jarvis, обновись»."
+        self.window.timeline.add("system", "UPDATE", text)
+        if self.tray:
+            self.tray.showMessage("J.A.R.V.I.S.", text, make_icon(), 8000)
+
+    def install_update(self, done=None) -> None:
+        """Кнопка «Обновить» в настройках: скачать, установить и перезапустить."""
+        import threading
+
+        from jarvis.services import updater
+
+        def work():
+            ok, text = updater.apply(self.update_info)
+            QTimer.singleShot(0, lambda: (done and done(ok, text), ok and self.restart_after_update()))
+
+        threading.Thread(target=work, name="update-apply", daemon=True).start()
+
+    def restart_after_update(self) -> None:
+        from jarvis.services import updater
+
+        updater.restart()
+        self.quit()
 
     def _refresh_news(self) -> None:
         import threading
