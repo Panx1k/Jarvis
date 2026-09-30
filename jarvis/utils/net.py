@@ -21,6 +21,7 @@ CANDIDATES = ["127.0.0.1:10809", "127.0.0.1:2080", "127.0.0.1:7890", "127.0.0.1:
 _VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
 _applied: str | None = None
 _user_set = any(os.environ.get(v) for v in _VARS)
+_user_proxy = next((os.environ[v] for v in _VARS if os.environ.get(v)), None)
 
 
 def _open(addr: str, timeout: float = 0.3) -> bool:
@@ -57,10 +58,14 @@ def find_local_proxy(settings=None) -> str | None:
     return None
 
 
+generation = 0
+
+
 def _set(url: str | None) -> None:
-    global _applied
+    global _applied, generation
     if url == _applied:
         return
+    generation += 1
     for v in _VARS:
         if url:
             os.environ[v] = url
@@ -77,8 +82,13 @@ def _set(url: str | None) -> None:
 def apply_proxy(settings=None) -> str | None:
     """Выбрать прокси для процесса JARVIS (HTTP_PROXY/HTTPS_PROXY). Возвращает адрес или None."""
     mode = (env("JARVIS_PROXY", "auto") or "auto").strip()
-    if _user_set or mode.lower() in ("off", "0", "no", "none"):
+    if mode.lower() in ("off", "0", "no", "none"):
         return None
+    if _user_set:
+        addr = _user_proxy.split("://")[-1].rstrip("/") if _user_proxy else ""
+        local = addr.startswith("127.") or addr.startswith("localhost")
+        _set(None if local and not _open(addr) else _user_proxy)
+        return _applied
     if mode.lower() != "auto":
         _set(mode if "://" in mode else f"http://{mode}")
         return _applied

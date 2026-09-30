@@ -574,6 +574,12 @@ class Assistant:
 
         if source == "error":
             spoken = responder.AI_DOWN[self.lang]
+            from jarvis.utils import net
+
+            if "gemini" in self.brain.describe().lower() and net.find_local_proxy(self.settings) is None:
+                spoken = ("Сэр, облачный мозг недоступен: Gemini из России работает только через VPN. "
+                          "Подключите Happ — меня можно пустить через него, не включая VPN для всего компьютера.")
+                text = spoken
             self.listener.on_message("assistant", text)
             self._speak(spoken, classify([], text, spoken, user_text, handled, source))
             return

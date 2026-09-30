@@ -243,3 +243,13 @@ def test_updater_zip_keeps_user_files(tmp_path, monkeypatch):
     assert not (tmp_path.parent / "evil.py").exists()
     assert "abc123" in (tmp_path / "config" / "update_state.json").read_text()
     assert "Обновлено" in text
+
+
+def test_relaunch_command_has_no_shell_quoting():
+    """Перезапуск после обновления — без cmd /c и кавычек (иначе Windows пыталась открыть «\\\\»)."""
+    from jarvis.services import updater
+
+    cmd = updater.relaunch_command(delay=0)
+    assert cmd[0].lower().endswith(("pythonw.exe", "python.exe")) and cmd[1] == "-c"
+    assert "cmd" not in [c.lower() for c in cmd] and "main.py" in cmd[2]
+    compile(cmd[2], "<relaunch>", "exec")

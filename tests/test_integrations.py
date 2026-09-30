@@ -316,3 +316,34 @@ def test_proxy_auto_uses_local_vpn_proxy(monkeypatch):
     assert net.apply_proxy() == "http://127.0.0.1:2080" and os.environ["HTTPS_PROXY"] == "http://127.0.0.1:2080"
     monkeypatch.setattr(net, "_open", lambda addr, timeout=0.3: False)
     assert net.apply_proxy() is None and "HTTPS_PROXY" not in os.environ
+
+
+def test_proxy_user_setting_ignored_while_vpn_down(monkeypatch):
+    import os
+
+    from jarvis.utils import net
+
+    monkeypatch.setattr(net, "_user_set", True)
+    monkeypatch.setattr(net, "_user_proxy", "http://127.0.0.1:10809")
+    monkeypatch.setattr(net, "_applied", "http://127.0.0.1:10809")
+    monkeypatch.setenv("JARVIS_PROXY", "auto")
+    monkeypatch.setattr(net, "_open", lambda addr, timeout=0.3: False)
+    gen = net.generation
+    assert net.apply_proxy() is None and "HTTPS_PROXY" not in os.environ and net.generation == gen + 1
+    monkeypatch.setattr(net, "_open", lambda addr, timeout=0.3: True)
+    assert net.apply_proxy() == "http://127.0.0.1:10809" and os.environ["HTTPS_PROXY"] == "http://127.0.0.1:10809"
+
+
+def test_brain_client_recreated_when_proxy_changes(monkeypatch):
+    from jarvis.brain.openai_brain import OpenAIBrain
+    from jarvis.utils import net
+
+    made = []
+    brain = OpenAIBrain.__new__(OpenAIBrain)
+    brain._clients = {}
+    brain._client_factory = lambda slot: made.append(slot.number) or object()
+    slot = NS(number=1)
+    a = brain._client(slot)
+    assert brain._client(slot) is a and made == [1]
+    monkeypatch.setattr(net, "generation", net.generation + 1)
+    assert brain._client(slot) is not a and made == [1, 1] and len(brain._clients) == 1

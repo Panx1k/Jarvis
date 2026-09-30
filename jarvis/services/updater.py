@@ -250,11 +250,23 @@ def apply(info: UpdateInfo | None = None, progress=None) -> tuple[bool, str]:
     return True, text
 
 
+DETACHED_PROCESS = 0x00000008
+
+
+def relaunch_command(delay: float = 3.0, target: list[str] | None = None) -> list[str]:
+    """Команда перезапуска: отдельный процесс Python ждёт и запускает JARVIS напрямую, без cmd и кавычек
+    (через cmd /c кавычки экранировались как \\" и Windows пыталась открыть «\\\\»)."""
+    python = Path(sys.executable)
+    pythonw = python.with_name("pythonw.exe")
+    target = target or [str(pythonw if pythonw.exists() else python), str(ROOT / "main.py")]
+    script = f"import time, subprocess; time.sleep({delay}); subprocess.Popen({target!r}, cwd={str(ROOT)!r})"
+    return [str(pythonw if pythonw.exists() else python), "-c", script]
+
+
 def restart() -> None:
     """Запустить JARVIS заново (через пару секунд, когда текущий процесс завершится)."""
-    bat = ROOT / "run_jarvis.bat"
-    subprocess.Popen(["cmd", "/c", f'timeout /t 3 /nobreak >nul & start "" "{bat}"'], cwd=str(ROOT),
-                     creationflags=CREATE_NO_WINDOW)
+    subprocess.Popen(relaunch_command(), cwd=str(ROOT), creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+                     close_fds=True)
 
 
 def main() -> None:

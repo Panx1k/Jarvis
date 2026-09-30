@@ -198,9 +198,13 @@ class OpenAIBrain:
                              timeout=float(self._cfg("TIMEOUT", default_timeout) or default_timeout), max_retries=0)
 
     def _client(self, slot: KeySlot):
-        if slot.number not in self._clients:
-            self._clients[slot.number] = self._client_factory(slot)
-        return self._clients[slot.number]
+        from jarvis.utils import net
+
+        key = (slot.number, net.generation)
+        if key not in self._clients:
+            self._clients = {k: v for k, v in self._clients.items() if k[0] != slot.number}
+            self._clients[key] = self._client_factory(slot)
+        return self._clients[key]
 
     @property
     def available(self) -> bool:
