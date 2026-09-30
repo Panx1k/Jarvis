@@ -33,7 +33,7 @@
 Нужен Windows 10/11 и Python 3.12.
 
 ```bat
-git clone https://github.com/<your-name>/jarvis.git
+git clone https://github.com/Panx1k/jarvis.git
 cd jarvis
 install.bat
 ```
