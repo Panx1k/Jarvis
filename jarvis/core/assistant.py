@@ -65,6 +65,7 @@ class Runtime:
     registry: ToolRegistry
     apps: AppIndex
     restart_requested: bool = False
+    execute: Callable[[str, dict], ToolResult] | None = None
 
 
 @dataclass
@@ -87,6 +88,7 @@ class Assistant:
         self.apps = AppIndex(self.settings)
         self.apps.refresh_async()
         self.rt = Runtime(self.settings, self.dialog, registry, self.apps)
+        self.rt.execute = self._execute
         self.brain = HybridBrain(self.rt)
 
         self.stt = None

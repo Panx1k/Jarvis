@@ -43,6 +43,14 @@ def summary() -> str:
     except Exception as exc:
         log.debug("steam: %s", exc)
     try:
+        from jarvis.config import Settings as _S
+
+        presets = list((_S().get("presets", {}) or {}).keys())
+        if presets:
+            parts.append("Пресеты пользователя (запуск — run_preset): " + ", ".join(presets))
+    except Exception as exc:
+        log.debug("presets: %s", exc)
+    try:
         from jarvis.services import spotify
 
         client = spotify.get()

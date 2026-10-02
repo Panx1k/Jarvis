@@ -133,6 +133,13 @@ QPushButton {
     font-size: 12px;
 }
 QPushButton:hover { background: rgba(0, 216, 255, 0.18); border-color: #00b8e6; }
+QListWidget, QPlainTextEdit, QDialog QLineEdit {
+    background: #08131e; border: 1px solid #16415f; border-radius: 8px; padding: 4px; font-size: 12px;
+}
+QListWidget::item { padding: 5px 6px; border-radius: 5px; }
+QListWidget::item:selected { background: rgba(0, 216, 255, 0.18); color: #e8fbff; }
+QDialog QLineEdit:focus, QPlainTextEdit:focus { border-color: #00b8e6; }
+QDialog QScrollArea { background: #050b13; }
 QProgressBar#micMeter { background: #08131e; border: 1px solid #12324a; border-radius: 3px; max-height: 6px; }
 QProgressBar#micMeter::chunk { background: #28ffdc; border-radius: 3px; }
 """

@@ -74,7 +74,7 @@ class RuleParser:
     def __init__(self, runtime):
         self.rt = runtime
         self.handlers: list[Callable[[_U, dict], Plan | None]] = [
-            self.h_small_talk, self.h_news, self.h_power, self.h_vpn, self.h_volume, self.h_media, self.h_youtube_latest,
+            self.h_small_talk, self.h_preset, self.h_news, self.h_power, self.h_vpn, self.h_volume, self.h_media, self.h_youtube_latest,
             self.h_result, self.h_tool_patterns, self.h_there, self.h_youtube, self.h_music, self.h_search,
             self.h_question, self.h_close, self.h_type, self.h_key, self.h_folder, self.h_site, self.h_app,
             self.h_play_fallback, self.h_open_fallback,
@@ -113,6 +113,13 @@ class RuleParser:
             text = translated
         state = {"site": self.rt.dialog.active_site, "results": bool(self.rt.dialog.last_results)
                  or bool(self.rt.dialog.last_results_source)}
+        m = re.match(r"^(?:(?:джарвис|jarvis)[\s,]+)?(?:создай|сделай|добавь|запомни|сохрани)\s+(?:новый\s+)?"
+                     r"(?:пресет|режим|сценарий)\s+(?P<name>[^:,—-]+?)\s*[:,—-]\s*(?P<steps>.+)$",
+                     normalize(text).strip())
+        if m:
+            raw = text.strip()
+            steps = raw[len(raw) - len(m.group("steps")):]
+            return Plan([Action("create_preset", {"name": m.group("name").strip(), "steps": steps})])
         actions: list[Action] = []
         weak = False
         for part in self.split(text):
@@ -330,6 +337,31 @@ class RuleParser:
             return self._plan("play_media")
         if re.search(MEDIA_WORDS, t):
             return self._plan("play_media", query=tail)
+        return None
+
+    def h_preset(self, u: _U, st: dict) -> Plan | None:
+        """«Режим работа», «запусти работу», «включи игровой режим» — только если такой пресет есть."""
+        from jarvis.tools.presets import find
+
+        settings = getattr(self.rt, "settings", None)
+        if settings is None or not (settings.get("presets", {}) or {}):
+            return None
+        n = u.n.strip(" .!?")
+        candidates = []
+        m = re.match(r"^(?:(?:включи|запусти|активируй|вруби|давай)\s+)?(?:режим|пресет|сценарий)\s+(?P<name>.+)$", n)
+        if m:
+            candidates.append(m.group("name"))
+        m = re.match(r"^(?:(?:включи|запусти|активируй|вруби|давай)\s+)?(?P<name>.+?)\s+(?:режим|пресет|сценарий)$", n)
+        if m:
+            candidates.append(m.group("name"))
+        m = re.match(r"^(?:включи|запусти|активируй|вруби|давай)\s+(?P<name>.+)$", n)
+        if m:
+            candidates.append(m.group("name"))
+        candidates.append(n)
+        for name in candidates:
+            found = find(settings, name)
+            if found:
+                return self._plan("run_preset", name=found[0])
         return None
 
     def h_news(self, u: _U, st: dict) -> Plan | None:

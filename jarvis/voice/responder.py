@@ -86,7 +86,9 @@ INFORMATIVE = {"get_time", "get_date", "get_weather", "get_volume", "media_statu
                "discord_open", "discord_send_message", "discord_answer_call", "discord_decline_call", "discord_status",
                "discord_screen_share", "discord_camera", "discord_disconnect", "discord_toggle_mute",
                "discord_toggle_deafen",
-               "window_minimize", "window_maximize", "window_show", "show_desktop", "news_open"}
+               "window_minimize", "window_maximize", "window_show", "show_desktop", "news_open",
+               "run_preset", "create_preset", "delete_preset", "list_presets", "set_theme", "jarvis_update_check",
+               "jarvis_update"}
 
 
 NEWS_TOOLS = {"news_get", "news_more", "news_details", "news_source"}

@@ -460,7 +460,11 @@ class NewsManager:
         """Фоновое обновление HUD: сколько свежих историй по категориям (без изменения текущей подборки)."""
         for cat in categories:
             q = NewsQuery(cat, "", "today")
-            items, ok, _ = self.fetch(q)
+            try:
+                items, ok, _ = self.fetch(q)
+            except RuntimeError:
+                return
+
             if ok:
                 stories = self.select(items, q)
                 self._save_cache(q, stories)

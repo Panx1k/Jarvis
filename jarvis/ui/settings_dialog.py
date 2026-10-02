@@ -22,8 +22,21 @@ class SettingsDialog(QDialog):
         self.c = controller
         s = controller.settings
         self.setWindowTitle("J.A.R.V.I.S. — настройки")
-        self.setMinimumWidth(460)
-        lay = QVBoxLayout(self)
+        self.setMinimumWidth(500)
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QScrollArea, QWidget
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+        screen = QGuiApplication.primaryScreen()
+        self.resize(540, min(900, int(screen.availableGeometry().height() * 0.85)) if screen else 800)
+        lay = QVBoxLayout(body)
         lay.setContentsMargins(22, 16, 22, 18)
         lay.setSpacing(8)
 
@@ -137,6 +150,26 @@ class SettingsDialog(QDialog):
         self.debug.toggled.connect(lambda v: controller.set_setting("ui.debug", v))
         lay.addWidget(self.debug)
 
+        lay.addWidget(_section("ПРЕСЕТЫ"))
+        from PySide6.QtWidgets import QListWidget
+
+        self.preset_list = QListWidget()
+        self.preset_list.setMaximumHeight(110)
+        self.preset_list.itemDoubleClicked.connect(lambda _i: self._edit_preset())
+        lay.addWidget(self.preset_list)
+        pr_row = QHBoxLayout()
+        for text, slot in (("Добавить", self._add_preset), ("Изменить", self._edit_preset),
+                           ("Удалить", self._delete_preset), ("Запустить", self._run_preset)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            pr_row.addWidget(b)
+        lay.addLayout(pr_row)
+        hint = QLabel("Голосом: «Jarvis, режим работа». Или «создай пресет работа: открой хром, открой телеграм».")
+        hint.setObjectName("subcaption")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self._reload_presets()
+
         lay.addWidget(_section("ОБНОВЛЕНИЯ"))
         up_row = QHBoxLayout()
         self.update_label = QLabel("Проверьте, вышла ли новая версия на GitHub.")
@@ -198,6 +231,92 @@ class SettingsDialog(QDialog):
         box.setChecked(bool(self.c.settings.get(f"ui.overlay.{key}", default)))
         box.toggled.connect(lambda v: self.c.set_overlay(key, v))
         return box
+
+    def _presets_store(self):
+        a = self.c.assistant
+        return a.settings if a else self.c.settings
+
+    def _reload_presets(self) -> None:
+        from jarvis.tools.presets import load
+
+        self.preset_list.clear()
+        for key, p in load(self._presets_store()).items():
+            title = p.get("title") or key
+            self.preset_list.addItem(f"{title}  —  {', '.join(p['steps'][:4])}{'…' if len(p['steps']) > 4 else ''}")
+            self.preset_list.item(self.preset_list.count() - 1).setData(256, key)
+
+    def _selected_preset(self) -> str | None:
+        item = self.preset_list.currentItem()
+        return item.data(256) if item else None
+
+    def _add_preset(self) -> None:
+        self._edit_preset(new=True)
+
+    def _edit_preset(self, new: bool = False) -> None:
+        from PySide6.QtWidgets import QDialogButtonBox, QLineEdit, QPlainTextEdit
+
+        from jarvis.tools.presets import load
+
+        key = None if new else self._selected_preset()
+        if not new and key is None:
+            return
+        preset = load(self._presets_store()).get(key, {}) if key else {}
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Пресет")
+        dlg.setMinimumWidth(420)
+        v = QVBoxLayout(dlg)
+        name = QLineEdit(preset.get("title") or key or "")
+        name.setPlaceholderText("Название, например: работа")
+        steps = QPlainTextEdit("\n".join(preset.get("steps", [])))
+        steps.setPlaceholderText("Одна команда в строке, как вы говорите JARVIS:\nоткрой Chrome\nоткрой Telegram\n"
+                                 "громкость 30\nвключи VPN\nподожди 2 секунды")
+        v.addWidget(QLabel("Название"))
+        v.addWidget(name)
+        v.addWidget(QLabel("Команды по порядку"))
+        v.addWidget(steps, 1)
+        status = QLabel("")
+        status.setObjectName("subcaption")
+        status.setWordWrap(True)
+        v.addWidget(status)
+        box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        v.addWidget(box)
+        box.rejected.connect(dlg.reject)
+
+        def save():
+            a = self.c.assistant
+            if a is None:
+                status.setText("JARVIS ещё запускается — попробуйте через пару секунд.")
+                return
+            lines = [ln.strip() for ln in steps.toPlainText().splitlines() if ln.strip()]
+            if key and name.text().strip() and name.text().strip().lower() != key:
+                from jarvis.tools.presets import delete_preset
+
+                delete_preset(a.rt, key)
+            r = a.rt.registry.call("create_preset", {"name": name.text().strip(), "steps": lines}, a.rt)
+            if not r.ok:
+                status.setText(r.message)
+                return
+            if r.data.get("unknown"):
+                status.setText(r.message)
+            self._reload_presets()
+            dlg.accept()
+
+        box.accepted.connect(save)
+        dlg.exec()
+
+    def _delete_preset(self) -> None:
+        key = self._selected_preset()
+        a = self.c.assistant
+        if key and a:
+            from jarvis.tools.presets import delete_preset
+
+            delete_preset(a.rt, key)
+            self._reload_presets()
+
+    def _run_preset(self) -> None:
+        key = self._selected_preset()
+        if key and self.c.assistant:
+            self.c.assistant.run_tool("run_preset", {"name": key}, f"Режим {key}")
 
     def _pick_color(self) -> None:
         from PySide6.QtGui import QColor

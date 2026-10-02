@@ -61,7 +61,7 @@ DYNAMIC_TOOLS = {"get_time", "get_date", "get_weather", "get_volume", "media_sta
                  "steam_uninstall", "search_web", "search_youtube", "play_youtube", "youtube_latest", "open_result",
                  "search_files", "spotify_play", "spotify_play_liked", "spotify_now_playing", "spotify_playlists",
                  "spotify_connect", "discord_status", "discord_send_message", "run_command", "restart_computer",
-                 "sleep_computer"}
+                 "sleep_computer", "create_preset", "delete_preset", "list_presets", "jarvis_update_check"}
 INFO_INTENTS = {"get_time": "TIME_RESPONSE", "get_date": "TIME_RESPONSE", "vpn_status": "VPN_STATUS",
                 "get_weather": "INFO_RESPONSE", "get_volume": "SYSTEM_STATUS", "steam_games": "INFO_RESPONSE"}
 
