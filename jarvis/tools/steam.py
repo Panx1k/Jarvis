@@ -25,6 +25,7 @@ log = logging.getLogger("jarvis.steam")
 REG_KEY = r"Software\Valve\Steam"
 HELPERS = {"steam.exe", "steamwebhelper.exe", "steamservice.exe", "gameoverlayui.exe", "steamerrorreporter.exe",
            "gameoverlayui64.exe", "steamerrorreporter64.exe"}
+ADDON_PREFIXES = ("millennium", "steamtools", "sfp", "steam-friends-patcher")
 
 
 @dataclass
@@ -92,12 +93,20 @@ def steam_processes() -> list[psutil.Process]:
 def running_steam_games() -> list[str]:
     """Процессы, запущенные Steam (игры), — кроме служебных."""
     games = []
+    root = str(steam_dir() or "").lower().rstrip("\\") + "\\"
     for sp in steam_processes():
         try:
             for child in sp.children(recursive=True):
                 name = child.name().lower()
-                if name not in HELPERS:
-                    games.append(child.name())
+                if name in HELPERS or name.startswith(ADDON_PREFIXES):
+                    continue
+                try:
+                    exe = (child.exe() or "").lower()
+                except psutil.Error:
+                    exe = ""
+                if root != "\\" and exe.startswith(root) and "\\steamapps\\" not in exe:
+                    continue
+                games.append(child.name())
         except psutil.Error:
             continue
     return sorted(set(games))

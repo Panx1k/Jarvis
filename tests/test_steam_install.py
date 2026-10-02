@@ -58,6 +58,27 @@ def test_install_tool_queues_and_restarts(fake_steam, monkeypatch):
     assert r.data["library"] == str(games)
 
 
+def test_steam_addons_are_not_games(monkeypatch, tmp_path):
+    root = tmp_path / "Steam"
+
+    def proc(name, exe):
+        return NS(name=lambda: name, exe=lambda: exe)
+
+    children = [proc("millennium.luavm64.exe", str(root / "millennium" / "bin" / "millennium.luavm64.exe")),
+                proc("millennium.crashhandler64.exe", str(root / "millennium" / "bin" / "x.exe")),
+                proc("helper.exe", str(root / "ext" / "helper.exe")),
+                proc("steamwebhelper.exe", str(root / "bin" / "steamwebhelper.exe")),
+                proc("cs2.exe", str(root / "steamapps" / "common" / "cs2" / "cs2.exe"))]
+    monkeypatch.setattr(steam, "steam_dir", lambda: root)
+    monkeypatch.setattr(steam, "steam_processes", lambda: [NS(children=lambda recursive: children)])
+    assert steam.running_steam_games() == ["cs2.exe"]
+    children.pop()
+    assert steam.running_steam_games() == []
+    load_builtin_tools()
+    assert not registry.get("steam_install").is_dangerous({"game": "Rust"})
+    assert not registry.get("steam_switch_account").is_dangerous({})
+
+
 def test_install_pattern_does_not_steal_other_commands():
     load_builtin_tools()
     tool = registry.get("steam_install")
