@@ -56,9 +56,14 @@ def test_steam_library_and_games_tool(fake_steam):
     assert "Counter-Strike 2 (10 ч" in fake_steam.library_summary()
 
 
-def test_steam_uninstall_needs_confirmation():
+def test_steam_uninstall_needs_confirmation(monkeypatch):
+    from jarvis.tools import steam
+
     assert registry.get("steam_uninstall").is_dangerous({"game": "Dota 2"})
+    monkeypatch.setattr(steam, "running_steam_games", lambda: [])
     assert not registry.get("steam_install").is_dangerous({"game": "Rust"})
+    monkeypatch.setattr(steam, "running_steam_games", lambda: ["Counter-Strike 2"])
+    assert registry.get("steam_install").is_dangerous({"game": "Rust"})
 
 
 class FakeSpotify:

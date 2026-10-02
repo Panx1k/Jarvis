@@ -112,6 +112,7 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="лог в консоль")
     parser.add_argument("--spotify-login", action="store_true", help="подключить Spotify (вход через браузер)")
     parser.add_argument("--minimized", action="store_true", help="запустить сразу в фоне (мини-ядро)")
+    parser.add_argument("--elevenlabs-voices", action="store_true", help="голоса аккаунта ElevenLabs (ID для .env)")
     parser.add_argument("--autostart", action="store_true", help="запуск вместе с Windows")
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -121,6 +122,18 @@ def main() -> None:
     net.apply_proxy(Settings())
     net.watch(Settings())
 
+    if args.elevenlabs_voices:
+        from jarvis.voice.elevenlabs import list_voices
+        try:
+            voices = list_voices()
+        except Exception as exc:
+            print(f"ElevenLabs: {exc}")
+            return
+        for v in voices:
+            labels = ", ".join(f"{k}: {val}" for k, val in v["labels"].items())
+            print(f"{v['id']}  {v['name']}  [{v['category']}]  {labels}")
+        print("\nВпишите нужный ID в .env: ELEVENLABS_VOICE_ID=…  и TTS_ENGINE=elevenlabs")
+        return
     if args.spotify_login:
         from jarvis.services import spotify
         client = spotify.get()

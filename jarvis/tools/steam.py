@@ -453,9 +453,85 @@ def steam_store(ctx, game: str) -> ToolResult:
     return ToolResult(True, f"Открываю {found[1]} в магазине Steam.", {"app": found[1]})
 
 
-@tool("steam_install", "Установить игру из Steam (откроется окно установки Steam; игра должна быть в библиотеке).",
+def library_folders() -> list[Path]:
+    steam = steam_dir()
+    if not steam:
+        return []
+    libs = [steam]
+    lf = steam / "steamapps" / "libraryfolders.vdf"
+    if lf.exists():
+        for p in re.findall(r'"path"\s*"([^"]+)"', lf.read_text(encoding="utf-8", errors="replace")):
+            path = Path(p.replace("\\\\", "\\"))
+            if path not in libs:
+                libs.append(path)
+    return [p for p in libs if (p / "steamapps").is_dir()]
+
+
+def preferred_library() -> Path | None:
+    """Библиотека, куда игры ставились в последний раз (по свежести файлов appmanifest)."""
+    best, best_time = None, -1.0
+    for lib in library_folders():
+        for acf in (lib / "steamapps").glob("appmanifest_*.acf"):
+            try:
+                mtime = acf.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > best_time:
+                best, best_time = lib, mtime
+    return best or (library_folders() or [None])[0]
+
+
+def _free_gb(path: Path) -> float:
+    import shutil
+
+    try:
+        return shutil.disk_usage(path).free / 1024 ** 3
+    except OSError:
+        return 0.0
+
+
+def queue_install(appid: str, name: str, library: Path) -> Path:
+    """Файл-заявка на установку — такой же Steam создаёт сам при нажатии «Установить». После перезапуска Steam видит
+    игру как «требует обновления» и скачивает её в эту библиотеку, без окна выбора диска."""
+    folder = re.sub(r'[<>:"/\\|?*]', "", name).strip(" .") or f"app_{appid}"
+    manifest = library / "steamapps" / f"appmanifest_{appid}.acf"
+    manifest.write_text(
+        '"AppState"\n{\n'
+        f'\t"appid"\t\t"{appid}"\n\t"Universe"\t\t"1"\n\t"name"\t\t"{name}"\n\t"StateFlags"\t\t"1026"\n'
+        f'\t"installdir"\t\t"{folder}"\n\t"LastUpdated"\t\t"0"\n\t"UpdateResult"\t\t"0"\n\t"SizeOnDisk"\t\t"0"\n'
+        '\t"buildid"\t\t"0"\n\t"LastOwner"\t\t"0"\n\t"BytesToDownload"\t\t"0"\n\t"BytesDownloaded"\t\t"0"\n'
+        '\t"AutoUpdateBehavior"\t\t"0"\n\t"AllowOtherDownloadsWhileRunning"\t\t"0"\n\t"ScheduledAutoUpdate"\t\t"0"\n'
+        '}\n', encoding="utf-8")
+    return manifest
+
+
+def restart_steam() -> bool:
+    """Штатно закрыть Steam (если запущен) и запустить снова."""
+    steam = steam_dir()
+    if not steam:
+        return False
+    exe = steam / "steam.exe"
+    if steam_processes():
+        subprocess.Popen([str(exe), "-shutdown"], creationflags=CREATE_NO_WINDOW)
+        deadline = time.time() + 25
+        while steam_processes() and time.time() < deadline:
+            time.sleep(0.5)
+        if steam_processes():
+            return False
+    subprocess.Popen([str(exe)], creationflags=CREATE_NO_WINDOW)
+    return True
+
+
+@tool("steam_install", "Скачать и установить игру из Steam без окна выбора диска — в библиотеку, куда ставились "
+      "прошлые игры. Steam перезапустится и начнёт загрузку (игра должна быть на аккаунте).",
       params={"game": {"type": "string", "description": "Название игры"}}, required=["game"],
-      announce="Устанавливаю {game}", category="steam")
+      dangerous=lambda a: bool(running_steam_games()),
+      confirm=lambda a: f"В Steam запущена игра ({', '.join(running_steam_games())}). Для установки Steam нужно "
+                        f"перезапустить — продолжить?",
+      announce="Устанавливаю {game}", category="steam",
+      patterns=[r"^(?:установи|скачай|загрузи|поставь)\s+(?:мне\s+)?(?:игру\s+)(?P<game>.+?)(?:\s+(?:в|из|со?)\s+"
+                r"(?:стим\w*|steam))?$",
+                r"^(?:установи|скачай|загрузи|поставь)\s+(?:мне\s+)?(?P<game>.+?)\s+(?:в|из|со?)\s+(?:стим\w*|steam)$"])
 def steam_install(ctx, game: str) -> ToolResult:
     import os
 
@@ -464,8 +540,23 @@ def steam_install(ctx, game: str) -> ToolResult:
     found = store_search(game)
     if not found:
         return ToolResult(False, f"Не нашёл игру «{game}» в Steam.")
-    os.startfile(f"steam://install/{found[0]}")
-    return ToolResult(True, f"Открыл установку {found[1]} в Steam.", {"app": found[1]})
+    appid, name = found
+    library = preferred_library()
+    if library is None:
+        os.startfile(f"steam://install/{appid}")
+        return ToolResult(True, f"Открыл установку {name} в Steam.", {"app": name})
+    try:
+        queue_install(appid, name, library)
+    except OSError:
+        os.startfile(f"steam://install/{appid}")
+        return ToolResult(True, f"Не смог записать в библиотеку — открыл установку {name} в Steam.", {"app": name})
+    if not restart_steam():
+        return ToolResult(False, f"Подготовил установку {name}, но Steam не закрылся — перезапустите его вручную, "
+                                 f"и загрузка начнётся.", {"app": name})
+    drive = str(library)[:2]
+    return ToolResult(True, f"Ставлю {name} на диск {drive} (свободно {_free_gb(library):.0f} ГБ) — туда же, где "
+                            f"остальные игры. Steam перезапускается и начнёт загрузку. Если игры нет на аккаунте, "
+                            f"Steam её не скачает.", {"app": name, "library": str(library)})
 
 
 @tool("steam_uninstall", "Удалить установленную игру Steam с компьютера (Steam сам ещё раз спросит).",

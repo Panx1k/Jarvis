@@ -8,7 +8,7 @@ import re
 import threading
 
 SECRET_ENV = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
-_SECRET_ENV_RE = re.compile(r"^(?:(?:OPENAI|GEMINI)_API_KEY(?:_\d+)?|ANTHROPIC_API_KEY)$")
+_SECRET_ENV_RE = re.compile(r"^(?:(?:OPENAI|GEMINI)_API_KEY(?:_\d+)?|ANTHROPIC_API_KEY|ELEVENLABS_API_KEY)$")
 _PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_\-*]{8,}"),
     re.compile(r"\bAIza[0-9A-Za-z_\-*]{20,}"),

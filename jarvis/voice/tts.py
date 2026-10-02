@@ -314,6 +314,13 @@ def make_tts() -> TTSEngine | None:
         online = FallbackTTS(edge, sapi)
     except ImportError:
         online = sapi
+    if engine == "elevenlabs":
+        from jarvis.voice.elevenlabs import ElevenLabsTTS
+
+        el = ElevenLabsTTS()
+        if el.ready:
+            return FallbackTTS(el, online)
+        log.warning("ElevenLabs: нет ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID в .env — говорю через Edge")
     if engine == "xtts":
         try:
             from jarvis.voice.xtts import XttsTTS

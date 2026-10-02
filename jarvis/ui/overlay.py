@@ -67,9 +67,10 @@ class Toast(QLabel):
 
     def __init__(self):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
-                         | Qt.WindowDoesNotAcceptFocus)
+                         | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setObjectName("overlayToast")
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -110,6 +111,7 @@ class MiniCore(QWidget):
         self._fullscreen_hidden = False
         self.voice_on = True
         self.toast = Toast()
+        self.hint = Toast()
         self._apply_flags()
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -190,6 +192,7 @@ class MiniCore(QWidget):
     def hide_core(self) -> None:
         self.hide()
         self.toast.hide()
+        self.hint.hide()
         self._timer.stop()
 
     def _check_fullscreen(self) -> None:
@@ -244,6 +247,7 @@ class MiniCore(QWidget):
         p.end()
 
     def mousePressEvent(self, event):
+        self.hint.hide()
         if event.button() == Qt.LeftButton:
             self._press = event.globalPosition().toPoint() - self.pos()
             self._dragged = False
@@ -270,11 +274,16 @@ class MiniCore(QWidget):
             self.open_requested.emit()
 
     def enterEvent(self, event):
-        from PySide6.QtWidgets import QToolTip
-
-        state = STATE_TIPS.get(self.renderer.state, "ONLINE")
-        QToolTip.showText(self.mapToGlobal(QPoint(0, 0)), f"J.A.R.V.I.S.\n{state}\nSay «Jarvis»…", self)
+        """Подсказка сбоку от ядра и «прозрачная» для мыши: раньше она появлялась поверх ядра, курсор оказывался
+        над ней, ядро считало, что мышь ушла, подсказка пряталась — и так по кругу (моргание, нельзя перетащить)."""
+        if self._press is None and not self.toast.isVisible():
+            state = STATE_TIPS.get(self.renderer.state, "ONLINE")
+            self.hint.show_near(f"J.A.R.V.I.S. · {state}\nSay «Jarvis»…", self.frameGeometry(), "ok")
         super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hint.hide()
+        super().leaveEvent(event)
 
     def _menu(self, at: QPoint) -> None:
         menu = QMenu(self)
