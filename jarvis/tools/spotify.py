@@ -122,16 +122,28 @@ def _playing(ctx, state: dict, what: str) -> ToolResult:
 _VAGUE = r"(?:что[- ]?(?:нибудь|то)|музыку|музон|песни|трек\w*)"
 
 
+DEFAULT_MODES = {"ironman": "Музыка из «Железного человека»", "liked": "Мои любимые треки",
+                 "resume": "Продолжить то, что играло"}
+
+
 @tool("spotify_play_default", "Включить музыку в Spotify, когда пользователь НЕ назвал, что именно "
-      "(«включи что-нибудь в Spotify», «включи музыку в Spotify», «музыку из Железного человека»). "
-      "По умолчанию — саундтрек «Железного человека» (AC/DC, Iron Man 2).",
+      "(«включи что-нибудь в Spotify», «включи музыку в Spotify»). Что включать — выбирает пользователь в настройках "
+      "(музыка из «Железного человека», любимые треки или продолжить). source=ironman — если прямо просят "
+      "музыку из «Железного человека».",
+      params={"source": {"type": "string", "enum": ["ironman"], "description": "ironman — явно Железный человек"}},
       announce="Включаю музыку в Spotify", category="spotify",
       patterns=[r"^(?:включи|поставь|вруби|запусти)\s+(?:мне\s+)?(?:что[- ]?(?:нибудь|то)\s+)?" + _VAGUE + r"?\s*"
                 + r"(?:(?:в|на|из)\s+)?(?:спотифа\w*|спотик\w*|spotify)$",
                 r"^(?:включи|поставь|вруби)\s+(?:мне\s+)?(?:музыку|песни|саундтрек)\s+(?:из\s+)?(?:фильма\s+)?"
-                r"(?:«)?(?:железн\w+ человек\w*|iron man)(?:»)?(?:\s+(?:в|на)\s+(?:спотифа\w*|spotify))?$"])
-def spotify_play_default(ctx) -> ToolResult:
-    default = (ctx.settings.get("spotify.default", {}) if getattr(ctx, "settings", None) else {}) or {}
+                r"(?:«)?(?P<source>железн\w+ человек\w*|iron man)(?:»)?(?:\s+(?:в|на)\s+(?:спотифа\w*|spotify))?$"])
+def spotify_play_default(ctx, source: str | None = None) -> ToolResult:
+    settings = getattr(ctx, "settings", None)
+    mode = (settings.get("spotify.default_mode", "ironman") if settings else "ironman") or "ironman"
+    if not source and mode == "liked":
+        return spotify_play_liked(ctx)
+    if not source and mode == "resume":
+        return _resume(ctx)
+    default = (settings.get("spotify.default", {}) if settings else {}) or {}
     uri = default.get("uri") or "spotify:album:4ydl8Ci7OsndhI2ALnrpIv"
     name = default.get("name") or "музыку из «Железного человека»"
     client = _client()
@@ -143,6 +155,21 @@ def spotify_play_default(ctx) -> ToolResult:
     except sp.SpotifyError as exc:
         return _err(exc)
     return _playing(ctx, st, name)
+
+
+def _resume(ctx) -> ToolResult:
+    """Продолжить то, что играло в Spotify (через API, а без подключения — системной кнопкой Play)."""
+    client = _client()
+    if client:
+        try:
+            client.player("PUT", "/play")
+            return ToolResult(True, "Продолжаю музыку в Spotify.", {"app": "Spotify"})
+        except sp.SpotifyError:
+            pass
+    from jarvis.tools.base import registry
+
+    r = registry.call("resume_media", {}, ctx)
+    return ToolResult(r.ok, "Продолжаю музыку." if r.ok else r.message, {"app": "Spotify"})
 
 
 @tool("spotify_play_liked", "Включить в Spotify «Любимые треки» (лайкнутые песни), вперемешку — только если "

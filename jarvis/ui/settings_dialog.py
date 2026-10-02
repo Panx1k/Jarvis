@@ -77,6 +77,21 @@ class SettingsDialog(QDialog):
         theme_row.addWidget(custom)
         lay.addLayout(theme_row)
 
+        from jarvis.tools.spotify import DEFAULT_MODES
+
+        lay.addWidget(_section("МУЗЫКА"))
+        music_row = QFormLayout()
+        self.music_mode = QComboBox()
+        for key, title in DEFAULT_MODES.items():
+            self.music_mode.addItem(title, key)
+        store = controller.assistant.settings if controller.assistant else s
+        mode = store.get("spotify.default_mode", "ironman") or "ironman"
+        self.music_mode.setCurrentIndex(max(0, list(DEFAULT_MODES).index(mode) if mode in DEFAULT_MODES else 0))
+        self.music_mode.activated.connect(
+            lambda row: controller.set_setting("spotify.default_mode", self.music_mode.itemData(row)))
+        music_row.addRow("«Включи что-нибудь в Spotify»", self.music_mode)
+        lay.addLayout(music_row)
+
         lay.addWidget(_section("ГОЛОС"))
         a = controller.assistant
         self.replies = QCheckBox("Отвечать голосом (выключено — только текст)")

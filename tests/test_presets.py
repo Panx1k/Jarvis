@@ -73,3 +73,25 @@ def test_wait_step_list_and_delete(env, monkeypatch):
     assert 2.0 in waits and [d[0] for d in done] == ["open_app", "set_volume"]
     assert "игры" in run(rt, p, "какие у меня пресеты")[1].message
     assert run(rt, p, "удали пресет игры")[1].ok and not presets_mod.load(rt.settings)
+
+
+def test_spotify_default_mode_can_be_changed(monkeypatch):
+    from jarvis.tools import spotify as sp_tools
+
+    calls = []
+    monkeypatch.setattr(sp_tools, "_client", lambda: NS(play=lambda body: calls.append(body) or
+                                                        {"is_playing": True, "item": None},
+                                                        player=lambda *a, **k: calls.append("resume"),
+                                                        api=lambda *a, **k: {"items": [{"track": {"uri": "u1"}}]}))
+    settings = MemSettings()
+    ctx = NS(settings=settings, dialog=NS(now_playing=None))
+    sp_tools.spotify_play_default(ctx)
+    assert calls[-1] == {"context_uri": "spotify:album:4ydl8Ci7OsndhI2ALnrpIv"}
+    settings.set("spotify.default_mode", "liked")
+    sp_tools.spotify_play_default(ctx)
+    assert calls[-1] == {"uris": ["u1"]}
+    settings.set("spotify.default_mode", "resume")
+    sp_tools.spotify_play_default(ctx)
+    assert calls[-1] == "resume"
+    sp_tools.spotify_play_default(ctx, source="железного человека")
+    assert calls[-1] == {"context_uri": "spotify:album:4ydl8Ci7OsndhI2ALnrpIv"}
