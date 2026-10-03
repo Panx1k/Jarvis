@@ -8,14 +8,29 @@ WAITING: слушаем фон, каждая фраза проверяется �
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Callable
 
-from jarvis.voice.audio import AudioSource, EnergyVAD, MicrophoneError
+from jarvis.voice.audio import SAMPLE_RATE, AudioSource, EnergyVAD, MicrophoneError, VoiceInputSettings
 from jarvis.voice.wake import WakeResult, WakeWordDetector
 
 log = logging.getLogger("jarvis.voiceloop")
+
+INCOMPLETE_TAIL = {"открой", "запусти", "включи", "выключи", "закрой", "найди", "поставь", "удали", "покажи",
+                   "сверни", "разверни", "переключи", "сделай", "прочитай", "добавь", "убери", "скажи", "расскажи",
+                   "напиши", "в", "во", "на", "и", "а", "про", "с", "со", "к", "для", "мне", "это", "ну", "давай",
+                   "можешь", "пожалуйста", "громкость", "найди", "отправь", "поменяй", "смени", "запиши", "ещё", "еще"}
+
+
+def incomplete(text: str) -> bool:
+    """Фраза оборвалась на полуслове: «Джарвис, открой…», «включи музыку в…» — стоит подождать продолжения."""
+    from jarvis.nlu.normalizer import is_wake_word
+
+    words = [w for w in re.split(r"[\s,.!?]+", (text or "").lower().replace("ё", "е")) if w]
+    words = [w for w in words if not is_wake_word(w)]
+    return bool(words) and words[-1] in INCOMPLETE_TAIL
 
 
 def peak(chunk: bytes) -> int:
@@ -34,7 +49,9 @@ class VoiceLoop:
                  on_error: Callable[[str], None] | None = None,
                  on_dead_mic: Callable[[], bool] | None = None,
                  is_blocked: Callable[[], bool] = lambda: False,
-                 max_phrase: float = 12.0):
+                 max_phrase: float = 12.0,
+                 settings: Callable[[], VoiceInputSettings] | None = None):
+        self.settings = settings or VoiceInputSettings
         self.on_dead_mic = on_dead_mic
         self.dead_after = 3.0
         self.restart = threading.Event()
@@ -77,6 +94,10 @@ class VoiceLoop:
         return time.monotonic() < self._followup_until
 
     def _run(self) -> None:
+        try:
+            self.detector.start()
+        except Exception as exc:
+            log.warning("Активатор не загрузился заранее: %s", exc)
         while self._running.is_set():
             try:
                 with self.source_factory() as src:
@@ -89,14 +110,23 @@ class VoiceLoop:
                 time.sleep(1)
 
     def _listen(self, src: AudioSource) -> None:
-        vad = EnergyVAD(max_phrase=self.max_phrase, silence_end=0.8)
+        cfg = self.settings()
+        vad = cfg.vad(max_phrase=min(self.max_phrase, cfg.command_timeout),
+                      silence_end=max(0.5, cfg.silence_timeout - 0.1))
         is_followup = False
         wake_heard = False
         window_open = False
         dead_since: float | None = None
+        pending: dict | None = None
         self.restart.clear()
         while self._running.is_set() and not self.restart.is_set():
             chunk = src.read(timeout=0.5)
+            if pending and chunk is not None:
+                pending["heard"] += len(chunk) / 2 / SAMPLE_RATE
+            if pending and not vad.speaking and (pending["heard"] > pending["wait"]
+                                                 or time.monotonic() > pending["until"]):
+                self._dispatch(pending["pcm"], pending["result"], pending["followup"])
+                pending = None
             if chunk is None:
                 continue
             if self.on_dead_mic is not None:
@@ -123,24 +153,52 @@ class VoiceLoop:
                 self.on_level(vad.level)
             if event == "start":
                 is_followup, wake_heard = self.in_followup, False
+                if pending:
+                    is_followup, wake_heard = pending["followup"], True
                 self.detector.start()
                 for frame in vad.frames:
                     wake_heard = self.detector.feed(frame) or wake_heard
                 if is_followup:
                     self._followup_until = time.monotonic() + self.max_phrase
-                if is_followup or wake_heard:
+                if (is_followup or wake_heard) and not pending:
                     self.on_wake()
             elif vad.speaking:
                 if self.detector.feed(chunk) and not (wake_heard or is_followup):
                     wake_heard = True
                     self.on_wake()
+            if event == "noise":
+                self.detector.start()
+                if pending:
+                    pending["wait"] = max(pending["wait"], pending["heard"] + 0.3)
+                is_followup = wake_heard = False
             if event == "end":
                 pcm = vad.take()
                 result = self.detector.finish(pcm)
+                if pending:
+                    gap = b"\x00\x00" * int(SAMPLE_RATE * 0.25)
+                    pcm = pending["pcm"] + gap + pcm
+                    text = " ".join(t for t in (pending["result"].text, result.text.split(" | ")[0]) if t)
+                    result = WakeResult(True, text, pending["result"].lang)
+                    is_followup = pending["followup"]
+                    log.info("Склеил фразу после паузы: «%s»", text)
+                    pending = None
+                    wake_heard = True
                 if is_followup or wake_heard or result.detected:
-                    self._followup_until = 0.0
+                    wait = self.settings().continuation
+                    if wait > 0 and incomplete(result.text.split(" | ")[0]):
+                        pending = {"pcm": pcm, "result": result, "followup": is_followup, "wait": wait, "heard": 0.0,
+                                   "until": time.monotonic() + wait * 3 + 2}
+                        log.info("Фраза оборвалась («%s») — жду продолжения %.1f с", result.text, wait)
+                        is_followup = wake_heard = False
+                        continue
+                    self._dispatch(pcm, result, is_followup)
                     window_open = False
-                    self.on_utterance(pcm, result, is_followup)
                 is_followup = wake_heard = False
                 if self.on_level:
                     self.on_level(0.0)
+        if pending:
+            self._dispatch(pending["pcm"], pending["result"], pending["followup"])
+
+    def _dispatch(self, pcm: bytes, result: WakeResult, followup: bool) -> None:
+        self._followup_until = 0.0
+        self.on_utterance(pcm, result, followup)

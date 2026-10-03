@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from jarvis.config import ROOT, env
@@ -14,6 +15,17 @@ class STTError(RuntimeError):
     pass
 
 
+@dataclass
+class STTResult:
+    """Что сказал пользователь: лучший вариант, уверенность распознавателя (если он её даёт) и другие варианты."""
+    text: str
+    confidence: float | None = None
+    alternatives: list[str] = field(default_factory=list)
+    lang: str = "ru"
+    engine: str = ""
+    audio_note: str | None = None
+
+
 class STTEngine:
     name = "base"
 
@@ -22,6 +34,11 @@ class STTEngine:
 
     def transcribe(self, pcm: bytes, sample_rate: int = 16000) -> str:
         raise NotImplementedError
+
+    def recognize(self, pcm: bytes, sample_rate: int = 16000) -> STTResult:
+        """Распознать с вариантами. Движки без вариантов возвращают один текст."""
+        text = self.transcribe(pcm, sample_rate)
+        return STTResult(text, None, [text] if text else [], engine=self.name)
 
 
 class GoogleSTT(STTEngine):
@@ -51,15 +68,31 @@ class GoogleSTT(STTEngine):
             raise STTError(f"сервис Google недоступен: {exc}") from exc
 
     def transcribe(self, pcm: bytes, sample_rate: int = 16000) -> str:
+        return self.recognize(pcm, sample_rate).text
+
+    def _recognize_all(self, audio, language: str) -> STTResult:
+        try:
+            raw = self.recognizer.recognize_google(audio, language=language, show_all=True)
+        except self.sr.UnknownValueError:
+            return STTResult("", None, [], language[:2], self.name)
+        except self.sr.RequestError as exc:
+            raise STTError(f"сервис Google недоступен: {exc}") from exc
+        alts = (raw or {}).get("alternative", []) if isinstance(raw, dict) else []
+        texts = [a.get("transcript", "").strip() for a in alts if a.get("transcript", "").strip()]
+        conf = next((a.get("confidence") for a in alts if "confidence" in a), None)
+        return STTResult(texts[0] if texts else "", float(conf) if conf is not None else None,
+                         list(dict.fromkeys(texts)), language[:2], self.name)
+
+    def recognize(self, pcm: bytes, sample_rate: int = 16000) -> STTResult:
         from jarvis.voice.lang import detect_lang
 
         audio = self.sr.AudioData(pcm, sample_rate, 2)
-        text = self._recognize(audio, self.language)
-        if self.second_language and (not text or detect_lang(text) == "en"):
-            second = self._recognize(audio, self.second_language)
-            if second and (not text or detect_lang(second) == "en"):
+        result = self._recognize_all(audio, self.language)
+        if self.second_language and (not result.text or detect_lang(result.text) == "en"):
+            second = self._recognize_all(audio, self.second_language)
+            if second.text and (not result.text or detect_lang(second.text) == "en"):
                 return second
-        return text
+        return result
 
 
 class VoskSTT(STTEngine):
@@ -102,13 +135,18 @@ class AutoSTT(STTEngine):
         self.name = primary.name + (f" → {fallback.name}" if fallback else "")
 
     def transcribe(self, pcm: bytes, sample_rate: int = 16000) -> str:
+        return self.recognize(pcm, sample_rate).text
+
+    def recognize(self, pcm: bytes, sample_rate: int = 16000) -> STTResult:
         try:
-            return self.primary.transcribe(pcm, sample_rate)
+            return self.primary.recognize(pcm, sample_rate)
         except STTError as exc:
             if not self.fallback:
                 raise
             log.warning("%s — переключаюсь на %s", exc, self.fallback.name)
-            return self.fallback.transcribe(pcm, sample_rate)
+            result = self.fallback.recognize(pcm, sample_rate)
+            result.confidence = 0.6 if result.text else None
+            return result
 
 
 def load_class(spec: str):
@@ -119,7 +157,9 @@ def load_class(spec: str):
     return getattr(importlib.import_module(module), cls)
 
 
-def make_stt(language: str = "ru-RU") -> STTEngine:
+def make_stt(language: str = "ru-RU", mode: str = "auto") -> STTEngine:
+    """mode: auto — русский, а фраза на английском распознаётся ещё раз по-английски; ru — только русский;
+    en — только английский."""
     raw = env("STT_ENGINE", "auto") or "auto"
     if ":" in raw:
         return load_class(raw)()
@@ -128,7 +168,12 @@ def make_stt(language: str = "ru-RU") -> STTEngine:
     if engine == "vosk":
         return vosk_engine
     second = env("STT_SECOND_LANGUAGE", "en-US")
-    google = GoogleSTT(language, None if second in ("", "none", "off") else second)
+    second = None if second in ("", "none", "off") else second
+    if mode == "ru":
+        language, second = "ru-RU", None
+    elif mode == "en":
+        language, second = "en-US", None
+    google = GoogleSTT(language, second)
     if engine == "google":
         return google
     return AutoSTT(google, vosk_engine if vosk_engine.available() else None)

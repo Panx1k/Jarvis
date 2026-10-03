@@ -8,7 +8,8 @@ from typing import Callable
 
 import numpy as np
 
-from jarvis.voice.audio import BLOCK_SEC, SAMPLE_RATE, AudioSource, EnergyVAD, MicrophoneError, MicrophoneSource
+from jarvis.voice.audio import (BLOCK_SEC, SAMPLE_RATE, AudioSource, EnergyVAD, MicrophoneError, MicrophoneSource,
+                                VoiceInputSettings)
 
 log = logging.getLogger("jarvis.recorder")
 
@@ -131,14 +132,16 @@ class Recorder:
 
     def record_phrase(self, stop: threading.Event | None = None, on_level: Callable[[float], None] | None = None,
                       wait_timeout: float = 7.0, max_phrase: float = 15.0, silence_end: float = 0.9,
-                      holding: Callable[[], bool] | None = None, source: AudioSource | None = None) -> bytes | None:
+                      holding: Callable[[], bool] | None = None, source: AudioSource | None = None,
+                      settings: VoiceInputSettings | None = None) -> bytes | None:
         """Записать одну фразу: ждёт начала речи до wait_timeout, заканчивает на паузе silence_end.
 
         holding — push-to-talk: пока функция возвращает True дольше PTT_HOLD_SEC, фраза не заканчивается
         по тишине; как только кнопку отпустили — запись завершается. Короткое нажатие = обычный режим.
         stop — ручная остановка (повторное нажатие кнопки).
+        settings — настройки голосового ввода (тишина, длительность, чувствительность) вместо значений по умолчанию.
         """
-        vad = EnergyVAD(silence_end=silence_end, max_phrase=max_phrase)
+        vad = settings.vad() if settings else EnergyVAD(silence_end=silence_end, max_phrase=max_phrase)
         t0 = time.monotonic()
         held_long = False
         started = False
@@ -161,6 +164,8 @@ class Recorder:
                     on_level(vad.level)
                 if event == "start":
                     started = True
+                elif event == "noise":
+                    started = False
                 elif event == "end":
                     break
                 elif not started and not held_long and time.monotonic() - t0 > wait_timeout:

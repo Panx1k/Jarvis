@@ -462,6 +462,14 @@ def steam_store(ctx, game: str) -> ToolResult:
     return ToolResult(True, f"Открываю {found[1]} в магазине Steam.", {"app": found[1]})
 
 
+def _excluded(ctx, game: str) -> ToolResult | None:
+    from jarvis.tools.exclusions import is_excluded, refusal
+
+    found = find_game(game) if game else None
+    hit = is_excluded(ctx, game, found[1] if found else "")
+    return refusal(hit, "удалять") if hit else None
+
+
 def library_folders() -> list[Path]:
     steam = steam_dir()
     if not steam:
@@ -570,7 +578,8 @@ def steam_install(ctx, game: str) -> ToolResult:
 
 @tool("steam_uninstall", "Удалить установленную игру Steam с компьютера (Steam сам ещё раз спросит).",
       params={"game": {"type": "string", "description": "Название игры"}}, required=["game"],
-      dangerous=True, confirm="Удалить игру {game} с компьютера?", announce="Удаляю {game}", category="steam")
+      dangerous=True, confirm="Удалить игру {game} с компьютера?", announce="Удаляю {game}", category="steam",
+      irreversible=True, precheck=lambda ctx, a: _excluded(ctx, a.get("game", "")))
 def steam_uninstall(ctx, game: str) -> ToolResult:
     import os
 

@@ -22,16 +22,18 @@ def open_url(ctx, url: str) -> ToolResult:
 
 @tool("open_site", "Открыть известный сайт по названию: youtube, google, яндекс, вк, github, gmail, википедия, "
       "twitch, chatgpt, карты, кинопоиск и др. Для произвольного адреса используй open_url.",
-      params={"site": {"type": "string", "description": "Название сайта, как его назвал пользователь"}},
+      params={"site": {"type": "string", "description": "Название сайта, как его назвал пользователь"},
+              "browser": {"type": "string", "description": "В каком браузере открыть (если пользователь назвал: "
+                                                           "Chrome, Edge, Firefox…). Без него — браузер по умолчанию"}},
       required=["site"], announce="Открываю сайт {site}", category="web")
-def open_site(ctx, site: str) -> ToolResult:
+def open_site(ctx, site: str, browser: str | None = None) -> ToolResult:
     found = find_site(ctx.settings, site)
     if not found:
         if looks_like_url(site):
             return open_url(ctx, site)
         return ToolResult(False, f"Не знаю сайт «{site}». Назовите адрес, например «открой habr.com».")
     key, cfg = found
-    open_in_browser(cfg["url"])
+    open_in_browser(cfg["url"], browser=browser)
     ctx.dialog.active_site = key
     ctx.dialog.last_url = cfg["url"]
     pretty = {"youtube": "YouTube", "google": "Google", "vk": "ВКонтакте", "github": "GitHub", "yandex": "Яндекс",

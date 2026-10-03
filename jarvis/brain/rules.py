@@ -75,8 +75,9 @@ class RuleParser:
         self.rt = runtime
         self.handlers: list[Callable[[_U, dict], Plan | None]] = [
             self.h_small_talk, self.h_preset, self.h_news, self.h_power, self.h_vpn, self.h_volume, self.h_media, self.h_youtube_latest,
-            self.h_result, self.h_tool_patterns, self.h_there, self.h_youtube, self.h_music, self.h_search,
-            self.h_question, self.h_close, self.h_type, self.h_key, self.h_folder, self.h_site, self.h_app,
+            self.h_result, self.h_tool_patterns, self.h_uninstall, self.h_there, self.h_youtube, self.h_music,
+            self.h_search, self.h_question, self.h_close, self.h_type, self.h_key, self.h_folder, self.h_site_in,
+            self.h_site, self.h_app,
             self.h_play_fallback, self.h_open_fallback,
         ]
 
@@ -459,6 +460,37 @@ class RuleParser:
         if m2:
             return self._plan("open_folder", folder=f[m2.start("p"):])
         return None
+
+    def h_uninstall(self, u: _U, st: dict) -> Plan | None:
+        """«Удали Steam», «снеси доту», «удали программу Zoom с компьютера». Файлы, пресеты и сообщения — не сюда."""
+        m = re.match(r"^(?:удали|снеси|деинсталлируй|удалить)\s+(?:мне\s+)?(?:с\s+(?:компьютера|компа|пк)\s+)?"
+                     r"(?:программу\s+|приложение\s+|игру\s+|прогу\s+)?(?P<a>.+?)(?:\s+с\s+(?:компьютера|компа|пк))?$",
+                     u.n)
+        if not m:
+            return None
+        a = m.group("a")
+        if re.match(r"^(?:файл|папк|сообщени|пресет|режим|сценари|истори|вс[её]\b|это|его|е[её]\b|текст|слов|букв|"
+                    r"вкладк|строк|последн|скриншот|снимок)", a):
+            return None
+        from jarvis.nlu import lexicon
+
+        known = lexicon.get(self.rt.settings).match(a, ("apps", "games"), threshold=0.84)
+        strong = known.best is not None and not known.ambiguous
+        return self._plan("uninstall_app", weak=not strong, app=u.grp(m, "a"))
+
+    def h_site_in(self, u: _U, st: dict) -> Plan | None:
+        """«Открой YouTube в Chrome» — сайт в названном браузере."""
+        from jarvis.tools._common import browser_exe
+
+        m = re.match(rf"^(?:{V_OPEN}|{V_LAUNCH}){FILL}\s+(?:сайт\s+)?(?P<s>.+?)\s+(?:в|во|через)\s+(?P<b>[\w\s-]+)$",
+                     u.n)
+        if not m or not find_site(self.rt.settings, u.grp(m, "s")):
+            return None
+        b = u.grp(m, "b")
+        if not browser_exe(b) and not re.match(r"^(?:хром|chrome|google chrome|гугл хром|эдж|edge|microsoft edge|"
+                                               r"firefox|фаерфокс|мозилл|опер|opera|яндекс браузер)", normalize(b)):
+            return None
+        return self._plan("open_site", site=u.grp(m, "s"), browser=b)
 
     def h_site(self, u: _U, st: dict) -> Plan | None:
         m = re.match(rf"^(?:{V_OPEN}|{V_LAUNCH}){FILL}\s+(?:сайт\s+)?(?P<s>.+)$", u.n)

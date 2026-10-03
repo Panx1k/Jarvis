@@ -132,6 +132,9 @@ class SettingsDialog(QDialog):
         lay.addWidget(self.meter)
         controller.bridge.level.connect(self._meter)
 
+        self._voice_input_section(lay)
+        self._confirm_section(lay)
+
         lay.addWidget(_section("ГОЛОСОВЫЕ СЕМПЛЫ"))
         cfg = a.samples.config() if a and a.samples else None
         self.samples_on = self._sample_check("Голосовые семплы JARVIS (подходящие ответы — записью)", "enabled",
@@ -160,7 +163,13 @@ class SettingsDialog(QDialog):
                           + (f", повреждённых пропущено {stats['broken']}" if stats["broken"] else "") + ".")
             info.setObjectName("subcaption")
             lay.addWidget(info)
-        self.debug = QCheckBox("Режим разработчика (отладка выбора записей в ленте)")
+        self.system_sounds = QCheckBox("Системные звуки (приветствие при запуске, «Да, сэр» на обращение)")
+        self.system_sounds.setChecked(bool(self._store().get("voice.system_sounds", True)))
+        self.system_sounds.toggled.connect(lambda v: controller.set_setting("voice.system_sounds", v))
+        lay.addWidget(self.system_sounds)
+        self.debug = QCheckBox("Режим разработчика: диагностика распознавания речи и выбора записей в ленте")
+        self.debug.setToolTip("Для каждой голосовой команды в ленте: STT → нормализация → намерение → "
+                              "сущности → уверенность → инструмент.")
         self.debug.setChecked(bool(s.get("ui.debug", False)))
         self.debug.toggled.connect(lambda v: controller.set_setting("ui.debug", v))
         lay.addWidget(self.debug)
@@ -184,6 +193,8 @@ class SettingsDialog(QDialog):
         hint.setWordWrap(True)
         lay.addWidget(hint)
         self._reload_presets()
+
+        self._exclusions_section(lay)
 
         lay.addWidget(_section("ОБНОВЛЕНИЯ"))
         up_row = QHBoxLayout()
@@ -240,6 +251,163 @@ class SettingsDialog(QDialog):
         buttons.addWidget(close)
         lay.addSpacing(6)
         lay.addLayout(buttons)
+
+    def _store(self):
+        a = self.c.assistant
+        return a.settings if a else self.c.settings
+
+    def _voice_input_section(self, lay) -> None:
+        from PySide6.QtWidgets import QLineEdit
+
+        from jarvis.voice.audio import LANGUAGES, NOISE_LEVELS, VoiceInputSettings
+
+        cfg = VoiceInputSettings.load(self._store())
+        lay.addWidget(_section("ГОЛОСОВОЙ ВВОД"))
+        ptt_row = QHBoxLayout()
+        self.ptt = QCheckBox("Push-to-Talk")
+        self.ptt.setToolTip("Удерживайте клавишу и говорите — отпустили, команда обработана.")
+        self.ptt.setChecked(cfg.push_to_talk)
+        self.ptt.toggled.connect(lambda v: self.c.set_setting("voice.input.push_to_talk", v))
+        self.hotkey = QLineEdit(self._store().get("voice.input.hotkey") or cfg.hotkey)
+        self.hotkey.setPlaceholderText("ctrl+alt+j")
+        self.hotkey.setToolTip("Например: ctrl+alt+j, ctrl+shift+space, f8")
+        apply_btn = QPushButton("Применить")
+        self.hotkey_status = QLabel("")
+        self.hotkey_status.setObjectName("subcaption")
+        apply_btn.clicked.connect(self._apply_hotkey)
+        ptt_row.addWidget(self.ptt)
+        ptt_row.addWidget(self.hotkey, 1)
+        ptt_row.addWidget(apply_btn)
+        lay.addLayout(ptt_row)
+        lay.addWidget(self.hotkey_status)
+
+        form = QFormLayout()
+        self.language = QComboBox()
+        for key, title in LANGUAGES.items():
+            self.language.addItem(title, key)
+        self.language.setCurrentIndex(list(LANGUAGES).index(cfg.language))
+        self.language.activated.connect(lambda i: self.c.set_setting("voice.input.language",
+                                                                     self.language.itemData(i)))
+        form.addRow("Язык команд", self.language)
+        self.noise = QComboBox()
+        for key, title in NOISE_LEVELS.items():
+            self.noise.addItem(title, key)
+        self.noise.setCurrentIndex(list(NOISE_LEVELS).index(cfg.noise_suppression))
+        self.noise.setToolTip("Лёгкое — убирает гул вентиляторов и выравнивает тихую речь, в живом режиме не "
+                              "пропускает фоновый шум между фразами.\nСильное — ещё и приглушает постоянный шум, "
+                              "но иногда съедает тихие слова. Выключено — звук как есть.")
+        self.noise.activated.connect(lambda i: self.c.set_setting("voice.input.noise_suppression",
+                                                                  self.noise.itemData(i)))
+        form.addRow("Шумоподавление", self.noise)
+        self._slider(form, "Пауза конца фразы", "silence_timeout", cfg.silence_timeout, 0.3, 2.5, 0.1, "{:.1f} с",
+                     "Сколько тишины ждать, прежде чем считать фразу законченной. Больше — не обрывает на паузах.")
+        self._slider(form, "Ждать продолжения", "continuation", cfg.continuation, 0.0, 3.0, 0.1, "{:.1f} с",
+                     "Если фраза оборвалась на полуслове («Джарвис, открой…»), сколько ждать её окончания.")
+        self._slider(form, "Макс. длина команды", "command_timeout", cfg.command_timeout, 4, 30, 1, "{:.0f} с",
+                     "Дольше этого фраза обрезается.")
+        self._slider(form, "Чувствительность VAD", "sensitivity", cfg.sensitivity, 1, 10, 1, "{:.0f}",
+                     "Выше — слышит тихую речь, но чаще реагирует на шум. Ниже — нужен голос погромче.")
+        self._slider(form, "Порог шума", "noise_threshold", cfg.noise_threshold, 100, 1500, 50, "{:.0f}",
+                     "Звук тише этого никогда не считается речью (клавиатура, вентилятор).")
+        self._slider(form, "Порог уверенности STT", "stt_threshold", cfg.stt_threshold, 0.1, 0.9, 0.05,
+                     "{:.2f}", "Если JARVIS уверен в распознанной команде меньше этого — попросит повторить.")
+        lay.addLayout(form)
+
+    def _slider(self, form, title: str, key: str, value: float, lo: float, hi: float, step: float, fmt: str,
+                tip: str) -> None:
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, int(round((hi - lo) / step)))
+        slider.setValue(int(round((float(value) - lo) / step)))
+        slider.setToolTip(tip)
+        label = QLabel(fmt.format(value))
+        label.setMinimumWidth(44)
+
+        def changed(pos: int) -> None:
+            v = round(lo + pos * step, 2)
+            label.setText(fmt.format(v))
+            self.c.set_setting(f"voice.input.{key}", int(v) if step >= 1 else v)
+
+        slider.valueChanged.connect(changed)
+        box = QHBoxLayout()
+        box.addWidget(slider, 1)
+        box.addWidget(label)
+        form.addRow(title, box)
+
+    def _apply_hotkey(self) -> None:
+        from jarvis.ui.hotkey import parse_hotkey
+
+        spec = self.hotkey.text().strip().lower()
+        try:
+            parse_hotkey(spec)
+        except ValueError as exc:
+            self.hotkey_status.setText(f"Не подходит: {exc}.")
+            return
+        self.c.set_setting("voice.input.hotkey", spec)
+        ok = getattr(self.c, "hotkey", None) is not None and self.c.hotkey.ok
+        self.hotkey_status.setText(f"Горячая клавиша: {spec}." if ok or not self.ptt.isChecked()
+                                   else f"{spec} занята другой программой — выберите другую.")
+
+    def _confirm_section(self, lay) -> None:
+        from jarvis.core import policy
+
+        lay.addWidget(_section("ПОДТВЕРЖДЕНИЯ"))
+        row = QFormLayout()
+        self.confirm_mode = QComboBox()
+        for key, title in policy.MODES.items():
+            self.confirm_mode.addItem(f"{title} — {policy.MODE_HINTS[key]}", key)
+        self.confirm_mode.setCurrentIndex(list(policy.MODES).index(policy.mode(self._store())))
+        self.confirm_mode.activated.connect(lambda i: self.c.set_setting("confirm.mode",
+                                                                         self.confirm_mode.itemData(i)))
+        row.addRow("Спрашивать «да/нет»", self.confirm_mode)
+        lay.addLayout(row)
+        hint = QLabel("Удаление программ и файлов, выключение, команды и отправка сообщений подтверждаются всегда.")
+        hint.setObjectName("subcaption")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+    def _exclusions_section(self, lay) -> None:
+        from PySide6.QtWidgets import QListWidget
+
+        lay.addWidget(_section("ИСКЛЮЧЕНИЯ"))
+        self.excl_list = QListWidget()
+        self.excl_list.setMaximumHeight(90)
+        lay.addWidget(self.excl_list)
+        row = QHBoxLayout()
+        for text, slot in (("Добавить", self._add_exclusion), ("Убрать", self._remove_exclusion)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        hint = QLabel("Эти программы JARVIS не закрывает, не завершает и не удаляет. Голосом: «добавь Discord в "
+                      "исключения», «какие у меня программы в исключениях?».")
+        hint.setObjectName("subcaption")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self._reload_exclusions()
+
+    def _reload_exclusions(self) -> None:
+        from jarvis.tools.exclusions import load
+
+        self.excl_list.clear()
+        for name in load(self._store()):
+            self.excl_list.addItem(name)
+
+    def _add_exclusion(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(self, "Исключение", "Программа (например, Discord):")
+        a = self.c.assistant
+        if ok and name.strip() and a:
+            a.rt.registry.call("exclusion_add", {"app": name.strip()}, a.rt)
+            self._reload_exclusions()
+
+    def _remove_exclusion(self) -> None:
+        item = self.excl_list.currentItem()
+        a = self.c.assistant
+        if item and a:
+            a.rt.registry.call("exclusion_remove", {"app": item.text()}, a.rt)
+            self._reload_exclusions()
 
     def _check(self, text: str, key: str, default: bool) -> QCheckBox:
         box = QCheckBox(text)
@@ -394,3 +562,4 @@ class SettingsDialog(QDialog):
         cur = self.c.settings.get("ui.overlay.position", "bottom_right")
         if cur in POSITIONS:
             self.position.setCurrentIndex(POSITIONS.index(cur))
+        self._reload_exclusions()

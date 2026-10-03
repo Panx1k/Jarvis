@@ -31,7 +31,7 @@ DEFAULT_REPO = "Panx1k/jarvis"
 KEEP_TOP = {".env", ".venv", "models", "voice", "samples", "logs", ".git", ".pytest_cache", "__pycache__"}
 KEEP_FILES = {"config/settings.json", "config/spotify_token.bin", "config/update_state.json"}
 KEEP_IF_EXISTS = {"config/news_sources.json", "config/gaming_sources.json", "assets/voice_samples/index.json",
-                  ".env.example"}
+                  ".env.example", "config/lexicon.json"}
 MIRROR_DIRS = ("jarvis", "tests", "scripts")
 CREATE_NO_WINDOW = 0x08000000
 

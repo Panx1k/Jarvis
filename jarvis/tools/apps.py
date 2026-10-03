@@ -62,10 +62,20 @@ def _describe(procs) -> str:
     return ", ".join(names)
 
 
+def _excluded_check(action: str):
+    def check(ctx, args: dict) -> ToolResult | None:
+        from jarvis.tools.exclusions import is_excluded, refusal
+
+        app = args.get("app") or args.get("game") or ""
+        found = is_excluded(ctx, app)
+        return refusal(found, action) if found else None
+    return check
+
+
 @tool("close_app", "Закрыть приложение штатно (как крестиком окна). Если оно не закрылось, будет предложено "
-      "завершить принудительно.",
+      "завершить принудительно. Программы из исключений не закрываются.",
       params={"app": {"type": "string", "description": "Название приложения"}}, required=["app"],
-      announce="Закрываю {app}", category="apps")
+      announce="Закрываю {app}", category="apps", precheck=_excluded_check("закрывать"))
 def close_app(ctx, app: str) -> ToolResult:
     display, procs = _find(ctx, app)
     if not procs:
@@ -87,7 +97,8 @@ def close_app(ctx, app: str) -> ToolResult:
 @tool("kill_app", "Принудительно завершить процессы приложения (несохранённые данные будут потеряны).",
       params={"app": {"type": "string", "description": "Название приложения"}}, required=["app"],
       dangerous=True, confirm="Принудительно завершить {app}? Несохранённые данные будут потеряны.",
-      announce="Принудительно завершаю {app}", category="apps")
+      announce="Принудительно завершаю {app}", category="apps", irreversible=True,
+      precheck=_excluded_check("завершать"))
 def kill_app(ctx, app: str) -> ToolResult:
     display, procs = _find(ctx, app)
     if not procs:
@@ -103,7 +114,90 @@ def kill_app(ctx, app: str) -> ToolResult:
     return ToolResult(True, f"Процессы {display} завершены.")
 
 
-@tool("list_apps", "Показать список установленных приложений, похожих на запрос (или первые из списка).",
+def _uninstall_target(ctx, args: dict) -> ToolResult | None:
+    """До подтверждения: найти программу, отказаться для исключений, уточнить при нескольких похожих."""
+    from jarvis.services import installed
+    from jarvis.tools.exclusions import is_excluded, refusal
+
+    app = (args.get("app") or "").strip()
+    if args.get("_target"):
+        return None
+    found = is_excluded(ctx, app)
+    if found:
+        return refusal(found, "удалять")
+    from jarvis.tools.exclusions import _canonical
+
+    programs = installed.installed()
+    canonical = _canonical(ctx, app)
+    matches = installed.find(app, programs)
+    if canonical != app.strip():
+        by_name = installed.find(canonical, programs)
+        if by_name and (not matches or by_name[0][0] > matches[0][0]):
+            matches = by_name
+    if matches and is_excluded(ctx, matches[0][1].name):
+        return refusal(is_excluded(ctx, matches[0][1].name), "удалять")
+    try:
+        from jarvis.tools.steam import find_game
+
+        game = find_game(app)
+    except Exception:
+        game = None
+    if game and (not matches or matches[0][0] < 0.95):
+        args.update(_target=game[1], _kind="steam", _appid=game[0])
+        return None
+    if not matches:
+        return ToolResult(False, f"Не нашёл «{app}» среди установленных программ. Если это приложение из Microsoft "
+                                 f"Store, его можно удалить в «Параметры → Приложения». Открыть?",
+                          followup=("open_settings", {"page": "apps"}))
+    best_score, best = matches[0]
+    close = [a for s, a in matches[1:4] if best_score - s < 0.05 and not installed.same(a.name, best.name)]
+    if close:
+        names = [best.name] + [a.name for a in close]
+        return ToolResult(False, "Нашёл несколько похожих: " + ", ".join(names) + ". Какую удалить?",
+                          {"candidates": names, "clarify": True})
+    args.update(_target=best.name, _kind="registry", _critical=best.critical, _publisher=best.publisher)
+    return None
+
+
+def _uninstall_question(args: dict) -> str:
+    name = args.get("_target") or args.get("app")
+    who = f" ({args['_publisher']})" if args.get("_publisher") else ""
+    warn = " Это системный компонент или драйвер — после удаления другие программы могут перестать работать." \
+        if args.get("_critical") else ""
+    where = " из Steam" if args.get("_kind") == "steam" else ""
+    return f"Удалить {name}{who}{where} с компьютера?{warn}"
+
+
+@tool("uninstall_app", "Удалить (деинсталлировать) программу или игру с компьютера. Откроется обычный мастер "
+      "удаления программы. Программы из исключений не удаляются. Всегда с подтверждением.",
+      params={"app": {"type": "string", "description": "Название программы"}}, required=["app"],
+      dangerous=True, irreversible=True, confirm=_uninstall_question, precheck=_uninstall_target,
+      announce=lambda a: f"Удаляю {a.get('_target') or a.get('app')}", category="apps",
+      patterns=[r"^(?:удали|снеси|деинсталлируй|удалить)\s+(?:с\s+компьютера\s+)?(?:программу|приложение|прогу)\s+"
+                r"(?P<app>.+?)(?:\s+с\s+(?:компьютера|компа|пк))?$"])
+def uninstall_app(ctx, app: str, _target: str = "", _kind: str = "", _appid: str = "", **_) -> ToolResult:
+    import subprocess
+
+    from jarvis.services import installed
+
+    if _kind == "steam":
+        import os
+
+        os.startfile(f"steam://uninstall/{_appid}")
+        return ToolResult(True, f"Открыл удаление {_target} в Steam — подтвердите там.", {"app": _target})
+    matches = [a for _, a in installed.find(_target or app) if installed.same(a.name, _target or app)] \
+        or [a for _, a in installed.find(_target or app)][:1]
+    if not matches:
+        return ToolResult(False, f"Программа «{_target or app}» уже не найдена среди установленных.")
+    target = matches[0]
+    try:
+        subprocess.Popen(installed.uninstall_command(target), shell=True, creationflags=CREATE_NO_WINDOW)
+    except OSError as exc:
+        return ToolResult(False, f"Не удалось запустить удаление {target.name}: {exc.strerror or exc}.")
+    return ToolResult(True, f"Запустил удаление {target.name}. Подтвердите в окне установщика.", {"app": target.name})
+
+
+@tool("list_apps","Показать список установленных приложений, похожих на запрос (или первые из списка).",
       params={"filter": {"type": "string", "description": "Необязательный фильтр"}}, category="apps")
 def list_apps(ctx, filter: str | None = None) -> ToolResult:
     names = ctx.apps.list_names(500)

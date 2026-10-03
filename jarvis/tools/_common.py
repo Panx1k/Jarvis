@@ -26,13 +26,48 @@ def _bring_browser_forward() -> None:
         winapi.focus_window(hwnd)
 
 
-def open_in_browser(url: str, bring_forward: bool = True) -> None:
-    """Открыть ссылку в браузере по умолчанию и показать окно браузера."""
+BROWSER_EXES = {"chrome": "chrome.exe", "edge": "msedge.exe", "firefox": "firefox.exe", "opera": "opera.exe",
+                "yandex_browser": "browser.exe", "brave": "brave.exe", "vivaldi": "vivaldi.exe"}
+
+
+def browser_exe(name: str) -> str | None:
+    """Путь к exe браузера по названию («хром», «Chrome», «edge») — из «App Paths» реестра."""
+    import winreg
+
+    from jarvis.utils.text import similarity
+
+    n = normalize(name or "").strip()
+    key = next((k for k in BROWSER_EXES if n.startswith(k[:4]) or similarity(n, k) >= 0.8), None)
+    if key is None:
+        aliases = {"хром": "chrome", "гугл": "chrome", "google chrome": "chrome", "эдж": "edge", "эйдж": "edge",
+                   "microsoft edge": "edge", "фаерфокс": "firefox", "мозилл": "firefox", "опер": "opera",
+                   "яндекс": "yandex_browser"}
+        key = next((v for a, v in aliases.items() if n.startswith(a)), None)
+    if key is None:
+        return None
+    exe = BROWSER_EXES[key]
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}") as k:
+                path = winreg.QueryValueEx(k, "")[0]
+                if path and os.path.exists(path.strip('"')):
+                    return path.strip('"')
+        except OSError:
+            continue
+    return None
+
+
+def open_in_browser(url: str, bring_forward: bool = True, browser: str | None = None) -> None:
+    """Открыть ссылку в браузере по умолчанию (или в указанном: «в хроме») и показать окно браузера."""
     import threading
 
     if not re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I):
         url = "https://" + url
-    os.startfile(url)
+    exe = browser_exe(browser) if browser else None
+    if exe:
+        subprocess.Popen([exe, url], creationflags=CREATE_NO_WINDOW)
+    else:
+        os.startfile(url)
     if bring_forward:
         threading.Thread(target=_bring_browser_forward, name="browser-front", daemon=True).start()
 

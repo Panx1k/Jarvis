@@ -53,6 +53,18 @@ class Tool:
     announce: str | Callable[[dict], str] | None = None
     patterns: list[re.Pattern] = field(default_factory=list)
     category: str = "general"
+    precheck: Callable[[Any, dict], "ToolResult | None"] | None = None
+    irreversible: bool = False
+
+    def check(self, ctx: Any, args: dict) -> "ToolResult | None":
+        """Проверка до подтверждения (исключения, «не нашёл», неоднозначность). Может уточнить args."""
+        if self.precheck is None:
+            return None
+        try:
+            return self.precheck(ctx, args)
+        except Exception:
+            log.exception("precheck %s", self.name)
+            return None
 
     def is_dangerous(self, args: dict) -> bool:
         return bool(self.dangerous(args)) if callable(self.dangerous) else bool(self.dangerous)
@@ -124,6 +136,9 @@ class ToolRegistry:
         missing = [p for p in t.required if args.get(p) in (None, "")]
         if missing:
             return ToolResult(False, f"Не хватает параметров для {name}: {', '.join(missing)}")
+        early = t.check(ctx, args)
+        if early is not None:
+            return early
         sig = inspect.signature(t.func)
         accepts_kwargs = any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values())
         clean = args if accepts_kwargs else {k: v for k, v in args.items() if k in sig.parameters}
@@ -143,14 +158,20 @@ registry = ToolRegistry()
 def tool(name: str, description: str, *, params: dict[str, dict] | None = None, required: list[str] | None = None,
          dangerous: bool | Callable[[dict], bool] = False, confirm: str | Callable[[dict], str] | None = None,
          announce: str | Callable[[dict], str] | None = None, patterns: list[str] | None = None,
-         category: str = "general") -> Callable:
-    """Декоратор регистрации инструмента."""
+         category: str = "general", precheck: Callable[[Any, dict], ToolResult | None] | None = None,
+         irreversible: bool = False) -> Callable:
+    """Декоратор регистрации инструмента.
+
+    precheck(ctx, args) — проверка до подтверждения: вернуть ToolResult, чтобы сразу ответить (например, «в
+    исключениях»), или None. irreversible — подтверждение спрашивается при любом режиме подтверждений.
+    """
 
     def decorator(func: Callable[..., ToolResult]) -> Callable[..., ToolResult]:
         registry.register(Tool(
             name=name, description=description, func=func, params=params or {}, required=required or [],
             dangerous=dangerous, confirm=confirm, announce=announce,
             patterns=[re.compile(p, re.I) for p in (patterns or [])], category=category,
+            precheck=precheck, irreversible=irreversible,
         ))
         return func
 

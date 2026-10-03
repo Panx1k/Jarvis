@@ -91,10 +91,31 @@ class JarvisApp:
         self.bridge.theme.connect(self.set_accent)
 
         self._make_tray()
+        self.hotkey = None
+        self.start_hotkey()
         if start_minimized:
             self.hide_to_background(first=True)
         else:
             self.show_main()
+
+    def start_hotkey(self) -> bool:
+        """Push-to-Talk по горячей клавише (voice.input.hotkey, по умолчанию Ctrl+Alt+J). Перезапускается при
+        изменении в настройках. False — выключено или клавиша занята другим приложением."""
+        from jarvis.voice.audio import VoiceInputSettings
+
+        if self.hotkey is not None:
+            self.hotkey.stop()
+            self.hotkey = None
+        cfg = VoiceInputSettings.load(self.settings)
+        spec = self.settings.get("voice.input.hotkey") or env("HOTKEY", "ctrl+alt+j")
+        if not cfg.push_to_talk or not spec:
+            return False
+        from jarvis.ui.hotkey import GlobalHotkey
+
+        holder: list = []
+        self.hotkey = GlobalHotkey(spec, lambda: _hotkey_listen(self.window, holder[0].is_held))
+        holder.append(self.hotkey)
+        return self.hotkey.ok
 
     def _make_assistant(self, listener):
         assistant = self._factory(listener)
@@ -246,6 +267,11 @@ class JarvisApp:
         target.set(key, value)
         if target is not self.settings:
             self.settings.set(key, value)
+        if key.startswith("voice.input."):
+            if self.assistant:
+                self.assistant.apply_voice_settings()
+            if key in ("voice.input.hotkey", "voice.input.push_to_talk"):
+                self.start_hotkey()
 
     def set_voice(self, enabled: bool) -> None:
         self.window.set_wake(enabled)
@@ -333,18 +359,9 @@ def run_gui(start_minimized: bool | None = None) -> int:
     if start_minimized is None:
         start_minimized = bool(Settings().get("ui.start_minimized", False))
     jarvis_app = JarvisApp(app, start_minimized=start_minimized)
-    window = jarvis_app.window
-
-    hotkey = None
-    spec = env("HOTKEY", "ctrl+alt+j")
-    if spec:
-        from jarvis.ui.hotkey import GlobalHotkey
-        holder: list = []
-        hotkey = GlobalHotkey(spec, lambda: _hotkey_listen(window, holder[0].is_held))
-        holder.append(hotkey)
     code = app.exec()
-    if hotkey:
-        hotkey.stop()
+    if jarvis_app.hotkey:
+        jarvis_app.hotkey.stop()
     return code
 
 

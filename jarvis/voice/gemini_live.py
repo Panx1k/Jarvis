@@ -55,7 +55,14 @@ LIVE_EXTRA = """
 «На компьютере». Окна: window_minimize / window_maximize / window_show. Spotify: spotify_play и др.
 Discord: discord_open, discord_send_message, звонки.
 Если инструмент сообщил, что действие требует подтверждения, спроси пользователя, и если он согласен —
-вызови confirm_action(confirm=true), если нет — confirm_action(confirm=false)."""
+вызови confirm_action(confirm=true), если нет — confirm_action(confirm=false).
+Понимание речи: обращение «Джарвис» (и искажения вроде «Джаред», «Жаро», «Jari»), слова-паразиты и мат смысла
+не меняют. «Можешь открыть…?», «давай запустим…», «Telegram мне открой» — это просьба выполнить действие.
+Названия могли распознаться с ошибкой («диск орд» — Discord, «стем» — Steam, «ксго»/«кэс» — Counter-Strike 2):
+сопоставь их с играми и программами из сведений «На компьютере». Если подходят несколько — спроси, какую.
+Если фраза оборвана, бессмысленна или явно обращена не к тебе (разговор с другими людьми, обрывок вроде
+«квартире выключить», «ma», «art») — НЕ вызывай инструменты: коротко переспроси «Повторите, сэр?» или промолчи
+одним словом. Никогда не выполняй действие по догадке, если не уверен, что тебя об этом попросили."""
 
 VOCABULARY = ["Jarvis", "Джарвис", "CS2", "КС", "Counter-Strike 2", "Dota 2", "Steam", "Discord", "Telegram",
               "Spotify", "YouTube", "VPN", "Chrome"]
@@ -248,6 +255,44 @@ class AudioPlayer:
         self._q.put(None)
 
 
+class NoiseGate:
+    """Шумовой гейт для живого режима: пока человек молчит, в Gemini уходит тишина вместо фона (вентилятор,
+    клавиатура, тихие разговоры рядом), и модель не реагирует на шум. Речь пропускается целиком: открытие —
+    после двух громких блоков подряд, с 0.3 с звука до начала речи (первое слово не теряется), закрытие —
+    только после hangover секунд тишины (паузы между словами не режутся)."""
+
+    def __init__(self, min_threshold: float = 350.0, factor: float = 2.7, hangover: float = 0.8,
+                 preroll: float = 0.3, start_blocks: int = 2):
+        self.min_threshold, self.factor, self.hangover = min_threshold, factor, hangover
+        self.start_blocks = start_blocks
+        self.pre: collections.deque[bytes] = collections.deque(maxlen=max(1, int(preroll / 0.03)))
+        self.open = False
+        self._run = 0
+        self._quiet = 0.0
+
+    def threshold(self, noise: float) -> float:
+        return max(self.min_threshold * 0.6, noise * self.factor * 0.8)
+
+    def process(self, chunk: bytes, level: float, noise: float) -> list[bytes]:
+        thr = self.threshold(noise)
+        silence = b"\x00" * len(chunk)
+        if self.open:
+            self._quiet = 0.0 if level >= thr * 0.6 else self._quiet + len(chunk) / 2 / IN_RATE
+            if self._quiet >= self.hangover:
+                self.open, self._run = False, 0
+                self.pre.clear()
+                return [silence]
+            return [chunk]
+        self.pre.append(chunk)
+        self._run = self._run + 1 if level > thr else 0
+        if self._run >= self.start_blocks:
+            self.open, self._quiet = True, 0.0
+            out = list(self.pre)
+            self.pre.clear()
+            return out
+        return [silence]
+
+
 class GeminiLive:
     def __init__(self, assistant: "Assistant"):
         from jarvis.brain.key_manager import load_keys
@@ -347,18 +392,44 @@ class GeminiLive:
             context += f"\nНа компьютере: {known}"
         instruction = (SYSTEM_PROMPT + LIVE_EXTRA + f"\n\n[Текущий контекст]\n{context}"
                        + (f"\n\n[Недавний разговор]\n{history}" if history else ""))
+        cfg = self._voice_cfg()
+        languages = {"ru": ["ru-RU"], "en": ["en-US"]}.get(cfg.language, ["ru-RU", "en-US"])
+        try:
+            vocabulary = list(dict.fromkeys(VOCABULARY + self.a.lexicon.vocabulary(80)))
+        except Exception:
+            vocabulary = VOCABULARY
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice))),
             system_instruction=instruction,
             tools=getattr(self, "_tools_cache", None) or self._tools(),
-            input_audio_transcription=types.AudioTranscriptionConfig(language_codes=["ru-RU", "en-US"],
-                                                                     custom_vocabulary=VOCABULARY),
+            input_audio_transcription=types.AudioTranscriptionConfig(language_codes=languages,
+                                                                     custom_vocabulary=vocabulary),
             output_audio_transcription=types.AudioTranscriptionConfig(),
-            realtime_input_config=types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(silence_duration_ms=600)),
+            realtime_input_config=types.RealtimeInputConfig(automatic_activity_detection=self._activity(cfg)),
         )
+
+    def _voice_cfg(self):
+        getter = getattr(self.a, "voice_cfg", None)
+        if getter is not None:
+            return getter()
+        from jarvis.voice.audio import VoiceInputSettings
+
+        return VoiceInputSettings()
+
+    @staticmethod
+    def _activity(cfg):
+        """VAD на стороне Gemini по настройкам голосового ввода: пауза конца фразы, чувствительность начала речи.
+        Конец речи — «низкая» чувствительность: фраза не обрывается на короткой паузе между словами."""
+        from google.genai import types
+
+        start = (types.StartSensitivity.START_SENSITIVITY_HIGH if cfg.sensitivity >= 7
+                 else types.StartSensitivity.START_SENSITIVITY_LOW)
+        return types.AutomaticActivityDetection(
+            silence_duration_ms=int(max(500, min(2500, cfg.silence_timeout * 1000 - 200))),
+            prefix_padding_ms=300, start_of_speech_sensitivity=start,
+            end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW)
 
     _NO_AUDIO = object()
 
@@ -486,6 +557,9 @@ class GeminiLive:
         loud = 0
         preroll: collections.deque[bytes] = collections.deque(maxlen=20)
         blob = lambda c: types.Blob(data=c, mime_type=f"audio/pcm;rate={IN_RATE}")
+        cfg = self._voice_cfg()
+        gate = NoiseGate(cfg.noise_threshold, cfg.factor, hangover=max(0.6, cfg.silence_timeout)) \
+            if cfg.noise_suppression != "off" else None
         with src:
             while not state["closed"]:
                 chunk = await loop.run_in_executor(None, src.read, 0.3)
@@ -526,7 +600,8 @@ class GeminiLive:
                     noise *= 1.005
                 if level > max(500.0, noise * 3):
                     state["last_activity"] = time.monotonic()
-                await session.send_realtime_input(audio=blob(chunk))
+                for out in (gate.process(chunk, level, noise) if gate else [chunk]):
+                    await session.send_realtime_input(audio=blob(out))
                 waiting = state.get("waiting_since")
                 if waiting and time.monotonic() - waiting < 60:
                     continue
@@ -614,6 +689,7 @@ class GeminiLive:
                     a.listener.on_state("executing")
                     responses = []
                     state["waiting_since"] = time.monotonic()
+                    self._turn_user = state["user_text"].strip()
                     for fc in msg.tool_call.function_calls:
                         result = await asyncio.to_thread(self._run_tool, fc.name, dict(fc.args or {}))
                         state["actions"].append(fc.name)
@@ -718,6 +794,9 @@ class GeminiLive:
             a._cancel_pending(pending)
             self._turn_override = "CANCELLED"
             return {"ok": True, "message": "Отменено."}
+        debug = getattr(a, "debug_live", None)
+        if debug is not None:
+            debug(getattr(self, "_turn_user", ""), name, args)
         r = a._execute(name, args)
         self._turn_calls.append(ToolCall(name, args, r))
         if r.data.get("pending"):

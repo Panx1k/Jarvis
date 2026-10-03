@@ -66,6 +66,8 @@ class Runtime:
     apps: AppIndex
     restart_requested: bool = False
     execute: Callable[[str, dict], ToolResult] | None = None
+    vision: Callable[[str, bytes], str] | None = None
+    speech_hint: str | None = None
 
 
 @dataclass
@@ -75,6 +77,17 @@ class PendingAction:
     question: str
     created: float
     action_id: str = ""
+
+
+@dataclass
+class Clarification:
+    """JARVIS переспросил («Discord или Discord PTB?», «Вы имели в виду Steam?») и ждёт ответа."""
+    understanding: Any
+    options: list[str]
+    created: float
+
+
+NOT_UNDERSTOOD_VOICE = "Не совсем понял команду. Повторите, пожалуйста."
 
 
 class Assistant:
@@ -90,6 +103,13 @@ class Assistant:
         self.rt = Runtime(self.settings, self.dialog, registry, self.apps)
         self.rt.execute = self._execute
         self.brain = HybridBrain(self.rt)
+        self.rt.vision = self.brain.vision
+        from jarvis.nlu import lexicon
+        from jarvis.nlu.understanding import SpeechUnderstanding
+
+        self.lexicon = lexicon.get(self.settings)
+        self.understanding = SpeechUnderstanding(self.rt, self.brain.rules, self.lexicon)
+        self.clarification: Clarification | None = None
 
         self.stt = None
         self.recorder = None
@@ -130,7 +150,7 @@ class Assistant:
             from jarvis.voice.recorder import Recorder
             from jarvis.voice.stt import make_stt
 
-            self.stt = make_stt(self.settings.get("stt_language", "ru-RU"))
+            self.stt = make_stt(self.settings.get("stt_language", "ru-RU"), self.voice_cfg().language)
             if self._audio_source_factory is None:
                 self.recorder = Recorder(env("MIC_DEVICE"), remembered=self.settings.get("voice.mic"))
                 self._audio_source_factory = self.recorder.source
@@ -195,7 +215,24 @@ class Assistant:
             on_error=lambda msg: self.listener.on_message("system", msg),
             on_dead_mic=self._on_dead_mic if self.recorder else None,
             is_blocked=self._voice_blocked,
+            settings=self.voice_cfg,
         )
+
+    def voice_cfg(self):
+        from jarvis.voice.audio import VoiceInputSettings
+
+        return VoiceInputSettings.load(self.settings)
+
+    def apply_voice_settings(self) -> None:
+        """Настройки голосового ввода изменились: язык распознавания, VAD — применить без перезапуска."""
+        cfg = self.voice_cfg()
+        if self.stt is not None and getattr(self, "_stt_language", None) != cfg.language:
+            from jarvis.voice.stt import make_stt
+
+            self.stt = make_stt(self.settings.get("stt_language", "ru-RU"), cfg.language)
+        self._stt_language = cfg.language
+        if self.voice_loop:
+            self.voice_loop.restart.set()
 
     def info(self) -> dict[str, Any]:
         return {
@@ -353,16 +390,37 @@ class Assistant:
             self.listener.on_status("Жду «Jarvis»" if self.wake_enabled else "Готов к командам")
 
     def _transcribe(self, pcm: bytes, fallback_text: str = "") -> str | None:
-        """Основной STT. При отсутствии сети — текст офлайн-модели (если есть). None — сбой."""
-        from jarvis.voice.stt import STTError
+        result = self._recognize(pcm, fallback_text)
+        return None if result is None else result.text
+
+    def _recognize(self, pcm: bytes, fallback_text: str = ""):
+        """Основной STT с вариантами распознавания. Перед ним — подготовка звука (гул, громкость, шум).
+        При отсутствии сети — текст офлайн-модели (если есть). None — сбой."""
+        from jarvis.voice.audio import enhance
+        from jarvis.voice.stt import STTError, STTResult
 
         self.listener.on_state("thinking")
         self.listener.on_status("Распознаю речь…")
+        cfg = self.voice_cfg()
+        seconds = len(pcm) / 2 / 16000
         try:
-            return self.stt.transcribe(pcm).strip()
+            clean, note = enhance(pcm, cfg.noise_suppression)
+        except Exception:
+            log.exception("Обработка звука")
+            clean, note = pcm, "без обработки"
+        try:
+            result = self.stt.recognize(clean)
         except STTError as exc:
             log.warning("STT: %s", exc)
-            return fallback_text or None
+            if not fallback_text:
+                return None
+            result = STTResult(fallback_text, 0.55, [fallback_text], "ru", "Vosk (офлайн)")
+        except Exception as exc:
+            log.warning("STT: %s", exc)
+            return None if not fallback_text else STTResult(fallback_text, 0.55, [fallback_text], "ru", "Vosk")
+        result.text = (result.text or "").strip()
+        result.audio_note = f"{seconds:.1f} с, {note}, {getattr(self.stt, 'name', 'STT')}"
+        return result
 
     def _listen_job(self, hold: Callable[[], bool] | None = None) -> None:
         if not self.recorder or not self.stt:
@@ -375,7 +433,8 @@ class Assistant:
         self.listener.on_state("listening")
         self.listener.on_status("Говорите…" if hold else "Слушаю…")
         try:
-            pcm = self.recorder.record_phrase(stop=self._listen_stop, on_level=self.listener.on_level, holding=hold)
+            pcm = self.recorder.record_phrase(stop=self._listen_stop, on_level=self.listener.on_level, holding=hold,
+                                              settings=self.voice_cfg())
         except MicrophoneError as exc:
             self.listener.on_message("system", str(exc))
             return
@@ -384,15 +443,15 @@ class Assistant:
         if not pcm:
             self.listener.on_status("Речь не услышана")
             return
-        text = self._transcribe(pcm)
-        if text is None:
+        result = self._recognize(pcm)
+        if result is None:
             self._say_only(responder.STT_DOWN[self.lang])
             return
-        if not text:
+        if not result.text:
             self._say_only(responder.NOT_HEARD[self.lang])
             return
-        self.listener.on_transcript(text)
-        self._handle(text, voice=True)
+        self.listener.on_transcript(result.text)
+        self._handle(result.text, voice=True, stt=result)
 
     def _voice_utterance(self, pcm: bytes, wake, followup: bool) -> None:
         """Фраза из голосового цикла: «Jarvis, …» или продолжение диалога без активатора."""
@@ -414,10 +473,11 @@ class Assistant:
                 self._open_followup(status="Слушаю команду…")
                 return
         offline = wake.text.split(" | ")[0] if wake.text else ""
-        text = self._transcribe(pcm, offline if wake.lang == "ru" else "")
-        if text is None:
+        result = self._recognize(pcm, offline if wake.lang == "ru" else "")
+        if result is None:
             self._say_only(responder.STT_DOWN[self.lang])
             return
+        text = result.text
         awaiting, self._awaiting_command = getattr(self, "_awaiting_command", False), False
         if not text:
             if followup and awaiting:
@@ -447,7 +507,9 @@ class Assistant:
             self._awaiting_command = True
             self._open_followup(status="Слушаю команду…")
             return
-        self._handle(command, voice=True, echo_text=text)
+        if command != text.strip():
+            result.alternatives = [self._strip_wake(a) or a for a in result.alternatives]
+        self._handle(command, voice=True, echo_text=text, stt=result)
         self._open_followup()
 
     SHORT_COMMANDS = {"да", "нет", "ага", "угу", "пауза", "стоп", "дальше", "продолжи", "продолжай", "громче", "тише",
@@ -482,10 +544,14 @@ class Assistant:
         return True
 
     def _ack(self) -> None:
-        """Ответ на «Jarvis» без команды: «Да, сэр» — записью JARVIS, если есть, иначе синтез."""
+        """Ответ на «Jarvis» без команды: «Да, сэр» — записью JARVIS, если есть, иначе синтез.
+        Системные звуки выключены — только текст в ленте, без голоса."""
         from jarvis.voice.intents import ResponseIntent
 
         spoken = responder.ACK[self.lang]
+        if not self.settings.get("voice.system_sounds", True):
+            self.listener.on_message("assistant", spoken)
+            return
         if self.samples and self.voice_replies:
             decision = self.samples.find_best_sample(ResponseIntent("WAKE"), "", self.lang)
             if decision.kind == "sample":
@@ -498,6 +564,8 @@ class Assistant:
         """Приветствие при запуске — только записью JARVIS («Я перезагрузился, сэр», утром «Доброе утро»).
         Подходящей записи нет — молча (синтезом при каждом запуске не приветствуем)."""
         if not self.samples or not self.voice_replies or not env_bool("SAMPLES_GREETING", True):
+            return
+        if not self.settings.get("voice.system_sounds", True):
             return
         import datetime as dt
 
@@ -620,7 +688,8 @@ class Assistant:
             self._say_only("Хорошо, сэр.", ResponseIntent("CANCELLED"))
         self.listener.on_state("idle")
 
-    def _handle(self, text: str, echo: bool = True, voice: bool = False, echo_text: str | None = None) -> None:
+    def _handle(self, text: str, echo: bool = True, voice: bool = False, echo_text: str | None = None,
+                stt=None) -> None:
         if echo:
             self.listener.on_message("user", echo_text or text)
         from jarvis.voice.wake import is_stop_command
@@ -654,8 +723,101 @@ class Assistant:
                 return
             self._cancel_pending(pending)
 
-        reply = self.brain.respond(command, self._execute)
+        if self.clarification is not None and self._resolve_clarification(command):
+            return
+
+        u = self.understanding.understand(command, stt, typed=not voice)
+        self._debug_understanding(u)
+        if u.clarify:
+            self._ask_clarification(u)
+            return
+        if voice and stt is not None and u.level == "low":
+            log.info("Низкая уверенность (%.2f) — прошу повторить: «%s»", u.confidence, u.raw)
+            self._say_only(NOT_UNDERSTOOD_VOICE)
+            self._awaiting_command = True
+            self._open_followup(status="Повторите команду…")
+            return
+        self.rt.speech_hint = self._speech_hint(u) if voice else None
+        try:
+            reply = self.brain.respond(u.text or command, self._execute)
+        finally:
+            self.rt.speech_hint = None
         self._finish(command, reply.text, reply.actions, reply.handled, reply.source)
+
+    @staticmethod
+    def _speech_hint(u) -> str | None:
+        """Для AI Brain: как фраза звучала до нормализации и какие ещё варианты слышал STT — чтобы при явной
+        ошибке распознавания модель поняла смысл по контексту, а не выполнила случайное."""
+        parts = []
+        if u.raw and normalize(u.raw) != normalize(u.text):
+            parts.append(f"распознано «{u.raw}», понято как «{u.text}»")
+        others = [a for a in u.alternatives[1:4] if a and a != u.raw]
+        if others:
+            parts.append("другие варианты распознавания: " + "; ".join(f"«{a}»" for a in others))
+        if u.stt_confidence is not None:
+            parts.append(f"уверенность распознавания {u.stt_confidence:.2f}")
+        return "; ".join(parts) or None
+
+    def _debug_understanding(self, u) -> None:
+        log.info("понимание: «%s» → «%s» %s %s (%.2f %s)%s", u.raw, u.text, u.intent, u.entities, u.confidence,
+                 u.level, f" контекст: {u.context}" if u.context else "")
+        if self.settings.get("ui.debug", False) or env_bool("JARVIS_DEBUG", False):
+            self.listener.on_debug(u.trace())
+
+    def debug_live(self, transcript: str, tool: str, args: dict) -> None:
+        """Диагностика живого режима: речь понимает сам Gemini, показываем, что он услышал и что вызвал."""
+        if not (self.settings.get("ui.debug", False) or env_bool("JARVIS_DEBUG", False)):
+            return
+        from jarvis.nlu.understanding import ENTITY_KEYS, INTENTS
+
+        norm = self.understanding.normalizer.normalize(transcript or "")
+        entities = ", ".join(f"{ENTITY_KEYS.get(k, k)}={v}" for k, v in args.items() if not str(k).startswith("_"))
+        self.listener.on_debug("\n".join([
+            f"STT (Gemini Live): «{transcript or '…'}»", f"NORMALIZED: «{norm.text}»",
+            f"INTENT: {INTENTS.get(tool, tool.upper())}", f"ENTITIES: {entities or '—'}",
+            "CONFIDENCE: решает Gemini Live", f"TOOL: {tool}"]))
+
+    def _ask_clarification(self, u) -> None:
+        options = list(u.candidates or ([u.suggestion] if u.suggestion else []))
+        self.clarification = Clarification(u, options, time.time())
+        log.info("Уточняю: %s (%s)", u.clarify, options)
+        self._say_only(u.clarify)
+        self._awaiting_command = True
+        self._open_followup(status="Жду уточнения…")
+
+    def _resolve_clarification(self, command: str) -> bool:
+        """Ответ на уточнение: «да», «первый», «Discord PTB» — выполнить исходную команду с выбранным названием.
+        False — это новая команда, а не ответ."""
+        c, self.clarification = self.clarification, None
+        if c is None or time.time() - c.created > 60:
+            return False
+        n = normalize(command).strip(" .!?")
+        chosen = None
+        if YES_RE.match(n) and len(c.options) == 1:
+            chosen = c.options[0]
+        elif NO_RE.match(n):
+            self._say_only("Хорошо. Повторите команду, пожалуйста.")
+            self._awaiting_command = True
+            self._open_followup(status="Повторите команду…")
+            return True
+        else:
+            from jarvis.utils.text import ordinal_to_int, similarity
+
+            idx = ordinal_to_int(n.split()[0]) if n else None
+            if idx and 1 <= idx <= len(c.options):
+                chosen = c.options[idx - 1]
+            elif c.options:
+                score, best = max((similarity(n, normalize(o)), o) for o in c.options)
+                chosen = best if score >= 0.7 or any(normalize(o) in n for o in c.options) else None
+        if chosen is None:
+            return False
+        u = c.understanding
+        verb = (u.text.split() or ["открой"])[0]
+        rebuilt = f"{verb} {chosen}"
+        log.info("Уточнение принято: «%s» → «%s»", command, rebuilt)
+        reply = self.brain.respond(rebuilt, self._execute)
+        self._finish(rebuilt, reply.text, reply.actions, reply.handled, reply.source)
+        return True
 
     def _finish(self, user_text: str, reply: str, actions: list[str], handled: bool = True,
                 source: str = "rules") -> None:
@@ -666,11 +828,22 @@ class Assistant:
 
     def _execute(self, name: str, args: dict) -> ToolResult:
         """Вызывается «мозгом». Опасные действия откладываются до подтверждения."""
+        from jarvis.core import policy
+
         tool = self.rt.registry.get(name)
         if tool is None:
             return ToolResult(False, f"Неизвестный инструмент: {name}")
-        if tool.is_dangerous(args):
-            question = tool.confirm_text(args)
+        early = tool.check(self.rt, args)
+        if early is not None:
+            self.listener.on_tool(name, "ok" if early.ok else "error", early.message)
+            if early.followup:
+                f_tool, f_args = early.followup
+                self._ask_confirmation(f_tool, f_args, early.message)
+                early.data["pending"] = True
+            self._calls.append(responder.ToolCall(name, args, early))
+            return early
+        if policy.needs_confirmation(tool, args, policy.mode(self.settings)):
+            question = tool.confirm_text(args) if tool.confirm else f"{tool.announce_text(args)} — подтверждаете?"
             self._ask_confirmation(name, args, question)
             r = ToolResult(False, f"{question} Скажите «да» или «нет».", {"pending": True})
             self._calls.append(responder.ToolCall(name, args, r))

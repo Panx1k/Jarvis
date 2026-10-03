@@ -423,6 +423,29 @@ class OpenAIBrain:
             log.warning("OpenAI: %s", redact(msg))
             raise BrainUnavailable(msg) from None
 
+    def vision(self, prompt: str, image: bytes, mime: str = "image/jpeg") -> str:
+        """Ответ модели по картинке (снимок экрана). Те же ключи и ротация, что и для обычных запросов."""
+        import base64
+
+        import openai
+
+        if not self.available:
+            raise BrainUnavailable(self.error or "AI Brain не настроен")
+        url = f"data:{mime};base64,{base64.b64encode(image).decode()}"
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt},
+                                                  {"type": "image_url", "image_url": {"url": url}}]}]
+        limit_key = "max_tokens" if self.base_url else "max_completion_tokens"
+        for model in self._model_order():
+            kwargs = {"model": model, "messages": messages, limit_key: 400}
+            try:
+                r = self._call(lambda c: c.chat.completions.create(**kwargs))
+                return clean_reply(r.choices[0].message.content or "")
+            except ModelUnavailable:
+                continue
+            except openai.OpenAIError as exc:
+                raise BrainUnavailable(_short_error(exc)) from None
+        raise BrainUnavailable(f"модели {self.label} сейчас недоступны")
+
     def _messages(self, text: str) -> list[dict]:
         msgs: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for user, reply in history_pairs(self.rt):

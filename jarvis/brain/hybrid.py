@@ -53,6 +53,14 @@ class FallbackLLM:
         ok2, msg2 = self.secondary.check_connection()
         return ok2, (f"{msg}. Работает запасной мозг: {msg2}" if ok2 else msg)
 
+    def vision(self, prompt: str, image: bytes) -> str:
+        if self.primary.available:
+            try:
+                return self.primary.vision(prompt, image)
+            except BrainUnavailable as exc:
+                log.warning("%s не видит картинку (%s) — пробую %s", self.primary.label, exc, self.secondary.label)
+        return self.secondary.vision(prompt, image)
+
     def respond(self, text, execute):
         if self.primary.available:
             try:
@@ -154,6 +162,13 @@ class HybridBrain:
         if self.mode == "rules" or not self.llm.available:
             return "Локальные правила"
         return f"{self.llm.describe()} + правила" if self.mode == "hybrid" else self.llm.describe()
+
+    def vision(self, prompt: str, image: bytes) -> str:
+        """Посмотреть на картинку облачной моделью. BrainUnavailable — нет облака (тогда OCR офлайн)."""
+        getter = getattr(self.llm, "vision", None)
+        if self.mode == "rules" or not self.llm.available or getter is None:
+            raise BrainUnavailable("облачный мозг недоступен")
+        return getter(prompt, image)
 
     def key_status(self) -> list[dict]:
         """Состояние API keys (только номер и статус) — для интерфейса."""
