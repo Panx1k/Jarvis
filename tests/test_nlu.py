@@ -27,7 +27,9 @@ INSTALLED = ["Discord", "Steam", "Google Chrome", "Telegram Desktop", "Firefox",
 
 @pytest.fixture(scope="module")
 def settings():
-    return Settings()
+    s = Settings()
+    s.data.setdefault("voice", {})["input"] = {"stt_threshold": 0.45}
+    return s
 
 
 @pytest.fixture(scope="module")

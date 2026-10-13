@@ -29,7 +29,8 @@ log = logging.getLogger("jarvis.updater")
 STATE_FILE = ROOT / "config" / "update_state.json"
 DEFAULT_REPO = "Panx1k/jarvis"
 KEEP_TOP = {".env", ".venv", "models", "voice", "samples", "logs", ".git", ".pytest_cache", "__pycache__"}
-KEEP_FILES = {"config/settings.json", "config/spotify_token.bin", "config/update_state.json"}
+KEEP_FILES = {"config/settings.json", "config/spotify_token.bin", "config/update_state.json", "config/memory.json",
+              "config/dialog_history.json"}
 KEEP_IF_EXISTS = {"config/news_sources.json", "config/gaming_sources.json", "assets/voice_samples/index.json",
                   ".env.example", "config/lexicon.json"}
 MIRROR_DIRS = ("jarvis", "tests", "scripts")

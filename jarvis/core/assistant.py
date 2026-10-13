@@ -68,6 +68,8 @@ class Runtime:
     execute: Callable[[str, dict], ToolResult] | None = None
     vision: Callable[[str, bytes], str] | None = None
     speech_hint: str | None = None
+    on_plan: Callable[[str, list], None] | None = None
+    agent: Callable[[str], ToolResult] | None = None
 
 
 @dataclass
@@ -104,6 +106,12 @@ class Assistant:
         self.rt.execute = self._execute
         self.brain = HybridBrain(self.rt)
         self.rt.vision = self.brain.vision
+        self.rt.on_plan = self._show_plan
+        self.rt.agent = self._agent_task
+        from jarvis.config import CONFIG_DIR
+
+        if not env_bool("JARVIS_NO_PERSIST", False) and self.dialog.load(CONFIG_DIR / "dialog_history.json"):
+            log.info("Разговор восстановлен: %d реплик", len(self.dialog.history))
         from jarvis.nlu import lexicon
         from jarvis.nlu.understanding import SpeechUnderstanding
 
@@ -217,6 +225,18 @@ class Assistant:
             is_blocked=self._voice_blocked,
             settings=self.voice_cfg,
         )
+
+    def _show_plan(self, goal: str, steps: list) -> None:
+        text = (goal + ":\n" if goal else "") + "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))
+        self.listener.on_message("plan", text)
+        self.listener.on_status("Выполняю задачу по плану…")
+
+    def _agent_task(self, goal: str) -> ToolResult:
+        """Сложная задача из живого режима: выполняет текстовый агент (план → действия → проверка)."""
+        reply = self.brain.run_task(goal, self._execute)
+        if self.pending is not None:
+            return ToolResult(False, reply.text, {"pending": True})
+        return ToolResult(reply.handled, reply.text, {"actions": reply.actions, "ask": reply.source == "llm_ask"})
 
     def voice_cfg(self):
         from jarvis.voice.audio import VoiceInputSettings

@@ -41,7 +41,11 @@ class DialogContext:
         self.last_url: str | None = None
         self.now_playing: str | None = None
         self.last_tool: str | None = None
+        self.last_mails: list = []
+        self.last_mail = None
+        self.task: dict | None = None
         self.history: deque[Turn] = deque(maxlen=max_turns)
+        self.persist_path = None
 
     def set_results(self, source: str, query: str, results: list[SearchResult]) -> None:
         with self._lock:
@@ -52,6 +56,36 @@ class DialogContext:
     def add_turn(self, user: str, reply: str, actions: list[str]) -> None:
         with self._lock:
             self.history.append(Turn(user, reply, actions))
+        if self.persist_path is not None:
+            self.save()
+
+    def save(self) -> None:
+        """Последние реплики на диске — чтобы после перезапуска JARVIS помнил, о чём шла речь."""
+        import json
+
+        with self._lock:
+            items = [{"user": t.user, "reply": t.reply, "actions": t.actions, "at": t.at} for t in self.history]
+        try:
+            self.persist_path.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+    def load(self, path, max_age: float = 12 * 3600) -> int:
+        """Подхватить сохранённый разговор (только свежий — не старше max_age секунд)."""
+        import json
+
+        self.persist_path = path
+        try:
+            items = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 0
+        now = time.time()
+        with self._lock:
+            for it in items if isinstance(items, list) else []:
+                if isinstance(it, dict) and now - float(it.get("at", 0)) < max_age:
+                    self.history.append(Turn(str(it.get("user", "")), str(it.get("reply", "")),
+                                             list(it.get("actions", [])), float(it["at"])))
+        return len(self.history)
 
     def snapshot(self) -> str:
         """Краткое текстовое описание состояния для LLM."""
@@ -67,8 +101,22 @@ class DialogContext:
                 lines.append(f"Последний поиск ({self.last_results_source}) «{self.last_query}», результаты:")
                 for i, r in enumerate(self.last_results[:8], 1):
                     lines.append(f"  {i}. {r.label()}")
+            if self.last_mails:
+                lines.append("Последний список писем (номера для mail_read / mail_reply):")
+                for i, m in enumerate(self.last_mails[:10], 1):
+                    lines.append(f"  {i}. {m.headline()}")
+            if self.last_mail is not None:
+                lines.append(f"Последнее прочитанное письмо: {self.last_mail.headline()}, "
+                             f"адрес {self.last_mail.sender_address}")
+            if self.task:
+                t = self.task
+                plan = "; ".join(f"{i}. {s}" for i, s in enumerate(t.get("steps", []), 1))
+                lines.append(f"Незавершённая задача: {t.get('goal', '')}" + (f". План: {plan}" if plan else "")
+                             + (f". Вопрос пользователю: {t['asked']}" if t.get("asked") else ""))
             return "\n".join(lines) if lines else "Контекст пуст (это начало разговора)."
 
     def clear(self) -> None:
         with self._lock:
+            path = self.persist_path
             self.__init__(self.history.maxlen or 20)
+            self.persist_path = path

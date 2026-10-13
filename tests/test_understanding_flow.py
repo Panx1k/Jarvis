@@ -43,8 +43,11 @@ def env(assistant, monkeypatch):
     a.dialog.history.clear()
     log.messages.clear()
     saved = dict(a.settings.data.get("confirm", {}) or {})
+    voice_saved = dict(a.settings.data.get("voice", {}) or {})
+    a.settings.data["voice"] = dict(voice_saved, input={"stt_threshold": 0.45})
     yield a, log, calls
     a.settings.data["confirm"] = saved
+    a.settings.data["voice"] = voice_saved
 
 
 def voice(a, text, conf=0.93):

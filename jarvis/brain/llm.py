@@ -96,7 +96,7 @@ class LLMBrain:
             msgs.append({"role": "assistant", "content": reply})
         return msgs
 
-    def respond(self, text: str, execute: Executor) -> BrainReply:
+    def respond(self, text: str, execute: Executor, agent: bool | None = None) -> BrainReply:
         if not self.available:
             raise BrainUnavailable(self.error or "LLM не настроен")
         messages = self._history() + [{"role": "user", "content": turn_prompt(self.rt, text)}]

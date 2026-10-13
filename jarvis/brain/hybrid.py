@@ -61,13 +61,14 @@ class FallbackLLM:
                 log.warning("%s не видит картинку (%s) — пробую %s", self.primary.label, exc, self.secondary.label)
         return self.secondary.vision(prompt, image)
 
-    def respond(self, text, execute):
+    def respond(self, text, execute, agent=None):
+        extra = {} if agent is None else {"agent": agent}
         if self.primary.available:
             try:
-                return self.primary.respond(text, execute)
+                return self.primary.respond(text, execute, **extra)
             except BrainUnavailable as exc:
                 log.warning("%s недоступен (%s) — отвечает %s", self.primary.label, exc, self.secondary.label)
-        return self.secondary.respond(text, execute)
+        return self.secondary.respond(text, execute, **extra)
 
 
 def pick_gemini_models(model_ids: list[str], limit: int = 5) -> list[str]:
@@ -198,9 +199,24 @@ class HybridBrain:
 
         threading.Thread(target=run, name="llm-check", daemon=True).start()
 
+    def run_task(self, goal: str, execute: Executor) -> BrainReply:
+        """Сложная задача в режиме агента (план → действия → проверка). Для живого режима: agent_task."""
+        if not self.llm.available or self.mode == "rules":
+            return BrainReply("Для сложных задач нужен облачный AI Brain — сейчас он недоступен.", False, "error")
+        try:
+            return self.llm.respond(goal, execute, agent=True)
+        except BrainUnavailable as exc:
+            return BrainReply(f"AI Brain сейчас недоступен ({exc}).", False, "error")
+
     def respond(self, text: str, execute: Executor) -> BrainReply:
+        from jarvis.brain.agent import needs_agent
+
         use_llm = self.llm.available and self.mode != "rules"
-        plan = None if self.mode == "llm" and use_llm else self.rules.parse(text)
+        task = getattr(getattr(self.rules.rt, "dialog", None), "task", None)
+        if use_llm and (needs_agent(text) or (task and task.get("asked"))):
+            plan = None
+        else:
+            plan = None if self.mode == "llm" and use_llm else self.rules.parse(text)
         if plan and (not plan.weak or not use_llm):
             log.info("rules → %s", [(a.tool, a.args) for a in plan.actions])
             return self.rules.run(plan, execute)

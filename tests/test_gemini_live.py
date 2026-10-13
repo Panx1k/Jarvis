@@ -51,7 +51,8 @@ def test_tools_include_registry_and_confirm():
     decls = live._tools()[0].function_declarations
     names = {d.name for d in decls}
     assert {"open_app", "set_volume", "steam_switch_account", "confirm_action"} <= names
-    assert len(names) == len(registry.all()) + 1
+    assert len(names) == len(registry.all()) - 2 + 1
+    assert "agent_task" in names and not {"task_plan", "ask_user"} & names
 
 
 def test_dangerous_action_needs_voice_confirmation():

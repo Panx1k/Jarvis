@@ -17,4 +17,6 @@ __pycache__/
 .vscode/
 Thumbs.db
 /config/update_state.json
+/config/memory.json
+/config/dialog_history.json
 /update_backup/

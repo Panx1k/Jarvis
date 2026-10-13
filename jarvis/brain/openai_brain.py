@@ -44,7 +44,9 @@ NETWORK_DOWN = "нет соединения с OpenAI API"
 
 DISCOVERY_TOOLS = {"search_files", "list_apps", "steam_accounts", "media_status", "vpn_status", "get_volume",
                    "get_time", "get_date", "get_weather", "search_web", "run_command",
-                   "news_get", "news_more", "news_details", "steam_games", "steam_game_info"}
+                   "news_get", "news_more", "news_details", "steam_games", "steam_game_info", "mail_check",
+                   "mail_list", "mail_read", "internet_search", "web_page_read", "http_request", "data_describe",
+                   "data_query", "run_script", "memory_recall", "screen_read", "agent_task"}
 
 
 class ModelUnavailable(Exception):
@@ -385,7 +387,7 @@ class OpenAIBrain:
     def _create_with(self, messages: list[dict], model: str):
         import openai
 
-        kwargs = dict(model=model, messages=messages, tools=self.rt.registry.openai_schemas(),
+        kwargs = dict(model=model, messages=messages, tools=self._schemas(getattr(self, "_agent_mode", False)),
                       tool_choice="auto")
         if self.temperature is not None:
             kwargs["temperature"] = self.temperature
@@ -446,8 +448,16 @@ class OpenAIBrain:
                 raise BrainUnavailable(_short_error(exc)) from None
         raise BrainUnavailable(f"модели {self.label} сейчас недоступны")
 
-    def _messages(self, text: str) -> list[dict]:
-        msgs: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    def _schemas(self, agent: bool) -> list[dict]:
+        """Инструменты для модели: agent_task — только для живого режима (иначе агент вызывал бы сам себя);
+        task_plan и ask_user — только в режиме задачи."""
+        skip = {"agent_task"} | (set() if agent else {"task_plan", "ask_user"})
+        return [s for s in self.rt.registry.openai_schemas() if s["function"]["name"] not in skip]
+
+    def _messages(self, text: str, agent: bool = False) -> list[dict]:
+        from jarvis.brain.agent import PROTOCOL
+
+        msgs: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT + (PROTOCOL if agent else "")}]
         for user, reply in history_pairs(self.rt):
             msgs.append({"role": "user", "content": user})
             msgs.append({"role": "assistant", "content": reply})
@@ -590,14 +600,34 @@ class OpenAIBrain:
             calls.append(call(name, args if isinstance(args, dict) else {}))
         return calls
 
-    def respond(self, text: str, execute: Executor) -> BrainReply:
+    def respond(self, text: str, execute: Executor, agent: bool | None = None) -> BrainReply:
+        from jarvis.brain.agent import needs_agent
+
         if not self.available:
             raise BrainUnavailable(self.config_error or KEY_MISSING)
-        messages = self._messages(text)
+        task = getattr(self.rt.dialog, "task", None)
+        if agent is None:
+            agent = needs_agent(text) or bool(task and task.get("asked"))
+        if agent:
+            log.info("Режим задачи: «%s»", text[:200])
+        self._agent_mode = agent
+        try:
+            reply = self._loop(text, execute, agent)
+        finally:
+            self._agent_mode = False
+        if agent and not reply.source.endswith("ask") and getattr(self.rt.dialog, "task", None) is not None:
+            self.rt.dialog.task = None
+        return reply
+
+    def _loop(self, text: str, execute: Executor, agent: bool) -> BrainReply:
+        from jarvis.brain.agent import AGENT_ROUNDS, FAILED, VERIFY
+
+        messages = self._messages(text, agent)
         actions: list[str] = []
+        results: list = []
         final = ""
-        nudged = False
-        for _ in range(self.max_rounds):
+        nudged = verified = corrected = False
+        for _ in range(AGENT_ROUNDS if agent else self.max_rounds):
             resp = self._create(messages)
             choice = resp.choices[0]
             msg = choice.message
@@ -622,6 +652,20 @@ class OpenAIBrain:
                 if not actions and nudged and self._needs_tool(text, final):
                     log.warning("Модель сообщила о действии, не выполнив его — ответ помечен как непроверенный")
                     return BrainReply(final, False, "llm_unverified", actions)
+                failures = [n for n, r in results if not r.ok]
+                if results and not corrected and failures and len(failures) == len(results) \
+                        and self._claims_done(final):
+                    corrected = True
+                    log.info("Инструменты вернули ошибки, а ответ говорит «готово» — прошу исправить")
+                    messages.append({"role": "assistant", "content": final})
+                    messages.append({"role": "user", "content": FAILED.format(errors=", ".join(failures))})
+                    continue
+                if agent and actions and not verified:
+                    verified = True
+                    log.info("Режим задачи: самопроверка итога")
+                    messages.append({"role": "assistant", "content": final})
+                    messages.append({"role": "user", "content": VERIFY.format(goal=text[:300])})
+                    continue
                 break
             if not text_calls and hasattr(msg, "model_dump"):
                 assistant = msg.model_dump(exclude_none=True)
@@ -642,6 +686,7 @@ class OpenAIBrain:
                 }
             messages.append(assistant)
             pending_msg = None
+            asked = None
             round_results: list = []
             for tc in tool_calls:
                 name = tc.function.name
@@ -653,23 +698,31 @@ class OpenAIBrain:
                     content = json.dumps({"ok": False, "message": f"Некорректные аргументы JSON: {exc}"},
                                          ensure_ascii=False)
                 else:
-                    if pending_msg:
-                        content = json.dumps({"ok": False, "message": "Пропущено: ждём подтверждения пользователя"},
+                    if pending_msg or asked:
+                        content = json.dumps({"ok": False, "message": "Пропущено: ждём ответа пользователя"},
                                              ensure_ascii=False)
                     else:
                         r = execute(name, args)
                         actions.append(name)
                         round_results.append((name, r))
+                        if name not in ("task_plan", "ask_user"):
+                            results.append((name, r))
                         if r.data.get("pending"):
                             pending_msg = r.message
                             content = json.dumps({"ok": False, "message": PENDING_NOTE}, ensure_ascii=False)
+                        elif r.data.get("ask"):
+                            asked = r.message
+                            content = json.dumps({"ok": True, "message": "Вопрос задан, ждём ответа"},
+                                                 ensure_ascii=False)
                         else:
                             content = self._tool_content(r)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
             if pending_msg:
                 final = pending_msg
                 break
-            if self.fast_actions and round_results and len(round_results) == len(tool_calls) and all(
+            if asked:
+                return BrainReply(asked, True, "llm_ask", actions)
+            if not agent and self.fast_actions and round_results and len(round_results) == len(tool_calls) and all(
                     r.ok and not r.followup and name not in DISCOVERY_TOOLS for name, r in round_results):
                 return BrainReply(" ".join(r.message for _, r in round_results), True, "llm_tools", actions)
         else:

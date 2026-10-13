@@ -426,6 +426,8 @@ class MainWindow(QMainWindow):
             self.timeline.add("voice", "COMMAND", f"«{text}»")
         elif role == "assistant":
             self.timeline.add("ai", "J.A.R.V.I.S.", text)
+        elif role == "plan":
+            self.timeline.add("ai", "PLAN", text)
         else:
             self.timeline.add("system", "SYSTEM", text)
             self._refresh_keys()

@@ -195,6 +195,8 @@ class SettingsDialog(QDialog):
         self._reload_presets()
 
         self._exclusions_section(lay)
+        self._mail_section(lay)
+        self._memory_section(lay)
 
         lay.addWidget(_section("ОБНОВЛЕНИЯ"))
         up_row = QHBoxLayout()
@@ -408,6 +410,94 @@ class SettingsDialog(QDialog):
         if item and a:
             a.rt.registry.call("exclusion_remove", {"app": item.text()}, a.rt)
             self._reload_exclusions()
+
+    def _mail_section(self, lay) -> None:
+        from jarvis.services import mail
+
+        lay.addWidget(_section("ПОЧТА"))
+        accounts = mail.accounts()
+        text = ("Подключено: " + ", ".join(a.label for a in accounts)) if accounts else \
+            ("Не подключена. Впишите в .env адрес (MAIL_ADDRESS) и пароль приложения (MAIL_APP_PASSWORD) — "
+             "как получить пароль приложения для Gmail, Mail.ru и Яндекса, написано в README.")
+        self.mail_status = QLabel(text)
+        self.mail_status.setObjectName("subcaption")
+        self.mail_status.setWordWrap(True)
+        lay.addWidget(self.mail_status)
+        if accounts:
+            row = QHBoxLayout()
+            check = QPushButton("Проверить подключение")
+            check.clicked.connect(self._check_mail)
+            row.addWidget(check)
+            row.addStretch(1)
+            lay.addLayout(row)
+
+    def _check_mail(self) -> None:
+        import threading
+
+        from PySide6.QtCore import QTimer
+
+        from jarvis.services import mail
+
+        self.mail_status.setText("Проверяю…")
+
+        def work():
+            lines = []
+            for account in mail.accounts():
+                try:
+                    n = mail.MailClient(account).unread_count()
+                    lines.append(f"{account.label}: работает, непрочитанных {n}")
+                except mail.MailError as exc:
+                    lines.append(f"{account.label}: {exc}")
+            QTimer.singleShot(0, self, lambda: self.mail_status.setText("\n".join(lines)))
+
+        threading.Thread(target=work, name="mail-check", daemon=True).start()
+
+    def _memory_section(self, lay) -> None:
+        from PySide6.QtWidgets import QListWidget
+
+        lay.addWidget(_section("ПАМЯТЬ"))
+        self.memory_list = QListWidget()
+        self.memory_list.setMaximumHeight(110)
+        lay.addWidget(self.memory_list)
+        row = QHBoxLayout()
+        for text, slot in (("Забыть выбранное", self._forget_fact), ("Очистить всё", self._clear_memory)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        hint = QLabel("Что JARVIS помнит о вас. Голосом: «запомни, что…», «что ты обо мне знаешь?», «забудь про…». "
+                      "Хранится только на этом компьютере; пароли и номера карт не запоминаются.")
+        hint.setObjectName("subcaption")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self._reload_memory()
+
+    def _reload_memory(self) -> None:
+        from jarvis.core import memory
+
+        self.memory_list.clear()
+        for fact in memory.get().facts:
+            self.memory_list.addItem(fact["text"])
+            self.memory_list.item(self.memory_list.count() - 1).setData(256, fact["id"])
+
+    def _forget_fact(self) -> None:
+        from jarvis.core import memory
+
+        item = self.memory_list.currentItem()
+        if item is None:
+            return
+        memory.get().remove(item.data(256))
+        self._reload_memory()
+
+    def _clear_memory(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        from jarvis.core import memory
+
+        if QMessageBox.question(self, "Память", "Стереть всё, что JARVIS о вас помнит?") == QMessageBox.Yes:
+            memory.get().clear()
+            self._reload_memory()
 
     def _check(self, text: str, key: str, default: bool) -> QCheckBox:
         box = QCheckBox(text)
